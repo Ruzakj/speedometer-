@@ -11,8 +11,8 @@ android {
         applicationId = "com.ruzakj.speedometer"
         minSdk = 23
         targetSdk = 36
-        versionCode = 7
-        versionName = "2.5"
+        versionCode = 8
+        versionName = "2.6"
     }
 
     buildTypes {
