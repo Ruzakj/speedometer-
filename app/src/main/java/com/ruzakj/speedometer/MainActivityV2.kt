@@ -1,6 +1,7 @@
 package com.ruzakj.speedometer
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.Context
@@ -19,7 +20,6 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
 import java.util.Locale
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -41,6 +41,10 @@ class MainActivityV2 : Activity(), LocationListener {
     private var averageSamples = 0
     private var accuracyM = 999f
     private var speedAccuracyMps = Float.MAX_VALUE
+
+    private var introAnimating = false
+    private var introSpeed = 0f
+    private var introAnimator: ValueAnimator? = null
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -69,6 +73,43 @@ class MainActivityV2 : Activity(), LocationListener {
         }
         setContentView(dash)
         handler.post(refresh)
+        playStartupSweep()
+    }
+
+    private fun playStartupSweep() {
+        introAnimator?.cancel()
+        introAnimating = true
+        introSpeed = 0f
+        introAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 1500L
+            addUpdateListener { animation ->
+                val t = animation.animatedValue as Float
+                introSpeed = if (t < 0.46f) {
+                    val p = easeOutCubic(t / 0.46f)
+                    180f * p
+                } else {
+                    val p = easeInOutCubic((t - 0.46f) / 0.54f)
+                    180f * (1f - p)
+                }
+                dash.invalidate()
+            }
+            doOnEnd = {
+                introAnimating = false
+                introSpeed = 0f
+                dash.invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun easeOutCubic(x: Float): Float {
+        val p = x.coerceIn(0f, 1f)
+        return 1f - (1f - p) * (1f - p) * (1f - p)
+    }
+
+    private fun easeInOutCubic(x: Float): Float {
+        val p = x.coerceIn(0f, 1f)
+        return if (p < 0.5f) 4f * p * p * p else 1f - ((-2f * p + 2f).let { it * it * it }) / 2f
     }
 
     private fun startTracking() {
@@ -180,9 +221,7 @@ class MainActivityV2 : Activity(), LocationListener {
         if (Build.VERSION.SDK_INT < 26 || isInPictureInPictureMode) return
         val params = PictureInPictureParams.Builder()
             .setAspectRatio(Rational(9, 16))
-            .apply {
-                if (Build.VERSION.SDK_INT >= 31) setSeamlessResizeEnabled(true)
-            }
+            .apply { if (Build.VERSION.SDK_INT >= 31) setSeamlessResizeEnabled(true) }
             .build()
         try {
             enterPictureInPictureMode(params)
@@ -222,6 +261,7 @@ class MainActivityV2 : Activity(), LocationListener {
     }
 
     override fun onDestroy() {
+        introAnimator?.cancel()
         handler.removeCallbacksAndMessages(null)
         locationManager.removeUpdates(this)
         super.onDestroy()
@@ -241,19 +281,17 @@ class MainActivityV2 : Activity(), LocationListener {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             canvas.drawColor(BG)
-            if (pipMode) {
-                drawPip(canvas)
-                return
-            }
-            drawFull(canvas)
+            if (pipMode) drawPip(canvas) else drawFull(canvas)
         }
+
+        private fun displaySpeed(): Float = if (introAnimating) introSpeed else speedKmh
 
         private fun drawPip(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
             val cx = w / 2f
             val cy = h * 0.48f
-            text(canvas, "GPS", cx, h * 0.16f, 12f, MUTED, true, Paint.Align.CENTER)
+            text(canvas, "MOTO • GPS", cx, h * 0.16f, 12f, CYAN, true, Paint.Align.CENTER)
             text(canvas, String.format(Locale.US, "%.1f", speedKmh), cx, cy, min(72f, w * 0.23f), TEXT, true, Paint.Align.CENTER)
             text(canvas, "km/h", cx, cy + df(30), 14f, MUTED, false, Paint.Align.CENTER)
             text(canvas, if (accuracyM < 900f) String.format(Locale.US, "±%.0f m • %s", accuracyM, gpsLabel()) else "SEARCHING GPS",
@@ -268,42 +306,48 @@ class MainActivityV2 : Activity(), LocationListener {
             val left = df(16)
             val right = w - df(16)
             val contentW = right - left
+            val shownSpeed = displaySpeed()
 
             text(canvas, "SPEEDOMETER", left, df(24), 19f, TEXT, true, Paint.Align.LEFT)
             text(canvas, if (tracking) "● GPS ACTIVE" else "○ GPS READY", left, df(45), 10f, if (tracking) GREEN else MUTED, true, Paint.Align.LEFT)
-            pill(canvas, right - df(88), df(10), df(88), df(28), "OFFLINE", CYAN)
-            pill(canvas, right - df(174), df(10), df(78), df(28), gpsLabel(), GREEN)
+            drawMotorcycleAccent(canvas, right - df(52), df(26), df(78), df(34))
+            pill(canvas, right - df(88), df(52), df(88), df(26), "OFFLINE", CYAN)
 
-            val panelTop = df(62)
-            val panelHeight = min(df(400), h * 0.49f)
+            val panelTop = df(86)
+            val panelHeight = min(df(380), h * 0.47f)
             val panel = RectF(left, panelTop, right, panelTop + panelHeight)
             roundCard(canvas, panel)
+            text(canvas, "RIDE / SPORT", left + df(18), panel.top + df(25), 9f, CYAN, true, Paint.Align.LEFT)
+            text(canvas, gpsLabel(), right - df(18), panel.top + df(25), 9f, gaugeColor(), true, Paint.Align.RIGHT)
+
             val cx = w / 2f
-            val cy = panel.top + panelHeight * 0.57f
-            val radius = min(contentW * 0.39f, panelHeight * 0.43f)
+            val cy = panel.top + panelHeight * 0.59f
+            val radius = min(contentW * 0.39f, panelHeight * 0.40f)
             val arc = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
 
             paint.style = Paint.Style.STROKE
             paint.strokeCap = Paint.Cap.ROUND
-            paint.strokeWidth = df(12)
+            paint.strokeWidth = df(10)
             paint.color = TRACK
             canvas.drawArc(arc, 140f, 260f, false, paint)
             paint.color = gaugeColor()
-            canvas.drawArc(arc, 140f, 260f * (speedKmh / 180f).coerceIn(0f, 1f), false, paint)
+            canvas.drawArc(arc, 140f, 260f * (shownSpeed / 180f).coerceIn(0f, 1f), false, paint)
+
             paint.strokeWidth = df(2)
             for (i in 0..9) {
                 val angle = Math.toRadians(140.0 + i * 260.0 / 9.0)
-                val r1 = radius - df(18)
+                val r1 = radius - df(16)
                 val r2 = radius - df(5)
-                paint.color = if (i * 20f <= speedKmh) gaugeColor() else GRID
+                paint.color = if (i * 20f <= shownSpeed) gaugeColor() else GRID
                 canvas.drawLine(cx + cos(angle).toFloat() * r1, cy + sin(angle).toFloat() * r1,
                     cx + cos(angle).toFloat() * r2, cy + sin(angle).toFloat() * r2, paint)
             }
-            text(canvas, "GPS SPEED", cx, cy - df(52), 12f, MUTED, true, Paint.Align.CENTER)
-            text(canvas, String.format(Locale.US, "%.1f", speedKmh), cx, cy + df(20), 64f, TEXT, false, Paint.Align.CENTER)
-            text(canvas, "km/h", cx, cy + df(49), 16f, MUTED, false, Paint.Align.CENTER)
-            text(canvas, if (accuracyM < 900f) String.format(Locale.US, "GPS ±%.0f m", accuracyM) else "WAITING FOR GPS",
-                cx, cy + df(76), 11f, gaugeColor(), true, Paint.Align.CENTER)
+
+            text(canvas, "GPS SPEED", cx, cy - df(50), 11f, MUTED, true, Paint.Align.CENTER)
+            text(canvas, String.format(Locale.US, "%.1f", shownSpeed), cx, cy + df(20), 62f, TEXT, false, Paint.Align.CENTER)
+            text(canvas, "km/h", cx, cy + df(49), 15f, MUTED, false, Paint.Align.CENTER)
+            text(canvas, if (introAnimating) "SYSTEM CHECK" else if (accuracyM < 900f) String.format(Locale.US, "GPS ±%.0f m", accuracyM) else "WAITING FOR GPS",
+                cx, cy + df(76), 10f, gaugeColor(), true, Paint.Align.CENTER)
 
             val dataTop = panel.bottom + df(10)
             val dataHeight = df(106)
@@ -331,6 +375,33 @@ class MainActivityV2 : Activity(), LocationListener {
             text(canvas, message, cx, buttonY - df(8), 10f, MUTED, true, Paint.Align.CENTER)
         }
 
+        private fun drawMotorcycleAccent(canvas: Canvas, cx: Float, cy: Float, width: Float, height: Float) {
+            val wheelR = height * 0.20f
+            val leftWheel = cx - width * 0.30f
+            val rightWheel = cx + width * 0.30f
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = df(1.8f.toInt())
+            paint.color = CYAN
+            canvas.drawCircle(leftWheel, cy + height * 0.20f, wheelR, paint)
+            canvas.drawCircle(rightWheel, cy + height * 0.20f, wheelR, paint)
+            val path = Path()
+            path.moveTo(leftWheel, cy + height * 0.20f)
+            path.lineTo(cx - width * 0.08f, cy + height * 0.08f)
+            path.lineTo(cx + width * 0.12f, cy + height * 0.20f)
+            path.lineTo(leftWheel, cy + height * 0.20f)
+            path.moveTo(cx - width * 0.08f, cy + height * 0.08f)
+            path.lineTo(cx + width * 0.02f, cy - height * 0.02f)
+            path.lineTo(cx + width * 0.18f, cy + height * 0.04f)
+            path.lineTo(rightWheel, cy + height * 0.20f)
+            path.moveTo(cx + width * 0.18f, cy + height * 0.04f)
+            path.lineTo(cx + width * 0.26f, cy - height * 0.08f)
+            path.moveTo(cx - width * 0.02f, cy - height * 0.01f)
+            path.lineTo(cx - width * 0.18f, cy - height * 0.01f)
+            paint.color = GREEN
+            paint.strokeCap = Paint.Cap.ROUND
+            canvas.drawPath(path, paint)
+        }
+
         private fun stat(canvas: Canvas, label: String, value: String, unit: String, x: Float, y: Float) {
             text(canvas, label, x, y + df(15), 9f, MUTED, true, Paint.Align.LEFT)
             text(canvas, value, x, y + df(34), 13f, TEXT, true, Paint.Align.LEFT)
@@ -348,7 +419,7 @@ class MainActivityV2 : Activity(), LocationListener {
         }
 
         private fun pill(canvas: Canvas, x: Float, y: Float, width: Float, height: Float, label: String, color: Int) {
-            fill.color = if (label == "OFFLINE") PANEL else if (label == "GOOD" || label == "EXCELLENT") GREEN_DARK else PANEL
+            fill.color = PANEL
             canvas.drawRoundRect(RectF(x, y, x + width, y + height), height / 2f, height / 2f, fill)
             text(canvas, label, x + width / 2f, y + height * 0.67f, 8f, color, true, Paint.Align.CENTER)
         }
