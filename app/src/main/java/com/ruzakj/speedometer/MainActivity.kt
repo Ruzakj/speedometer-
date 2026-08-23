@@ -7,13 +7,18 @@ import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.view.Window
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -25,12 +30,12 @@ import kotlin.math.min
 
 class MainActivity : Activity(), LocationListener {
     private lateinit var speedView: SpeedView
-    private lateinit var speedText: TextView
     private lateinit var maxText: TextView
     private lateinit var avgText: TextView
     private lateinit var distanceText: TextView
     private lateinit var timeText: TextView
     private lateinit var accuracyText: TextView
+    private lateinit var gpsText: TextView
     private lateinit var statusText: TextView
     private lateinit var actionButton: Button
     private lateinit var locationManager: LocationManager
@@ -42,7 +47,6 @@ class MainActivity : Activity(), LocationListener {
     private var totalDistance = 0f
     private var movingTimeMs = 0L
     private var startTimeMs = 0L
-    private var lastMovingTimestampMs = 0L
     private var lastAcceptedElapsedNs = 0L
     private var speedSamples = 0
     private var speedSum = 0.0
@@ -50,6 +54,12 @@ class MainActivity : Activity(), LocationListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.statusBarColor = BG
+        window.navigationBarColor = BG
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         buildUi()
     }
@@ -57,79 +67,116 @@ class MainActivity : Activity(), LocationListener {
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(22, 18, 22, 18)
-            setBackgroundColor(0xFF080A0F.toInt())
+            setBackgroundColor(BG)
+            setPadding(dp(16), dp(8), dp(16), dp(10))
         }
 
+        // Android 15/16 edge-to-edge safe area.
+        if (Build.VERSION.SDK_INT >= 30) {
+            root.setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                view.setPadding(dp(16), bars.top + dp(8), dp(16), bars.bottom + dp(10))
+                insets
+            }
+            root.requestApplyInsets()
+        }
+
+        val header = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
         val title = TextView(this).apply {
-            text = "SPEEDOMETER  •  GPS ONLY"
-            textSize = 17f
-            setTextColor(0xFFF3F5F7.toInt())
-            gravity = Gravity.CENTER
+            text = "SPEEDOMETER"
+            textSize = 20f
+            typeface = Typeface.create("sans", Typeface.BOLD)
+            setTextColor(TEXT)
         }
-        root.addView(title, LinearLayout.LayoutParams(-1, 48))
-
         statusText = TextView(this).apply {
-            text = "GPS: READY • Offline"
-            textSize = 13f
-            setTextColor(0xFF8D96A3.toInt())
-            gravity = Gravity.CENTER
+            text = "GPS ready • Offline"
+            textSize = 12f
+            setTextColor(MUTED)
         }
-        root.addView(statusText, LinearLayout.LayoutParams(-1, 32))
+        titleBox.addView(title, LinearLayout.LayoutParams(-1, dp(28)))
+        titleBox.addView(statusText, LinearLayout.LayoutParams(-1, dp(20)))
+        header.addView(titleBox, LinearLayout.LayoutParams(0, dp(52), 1f))
+
+        val offline = chip("OFFLINE")
+        header.addView(offline, LinearLayout.LayoutParams(dp(78), dp(34)))
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(58)))
 
         speedView = SpeedView(this)
         root.addView(speedView, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        speedText = TextView(this).apply {
-            text = "0.0 km/h"
-            textSize = 1f
-            setTextColor(0x00000000)
-        }
-
         val stats = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(8, 4, 8, 4)
         }
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
-        maxText = stat("MAX", "0.0 km/h")
-        avgText = stat("AVG", "0.0 km/h")
-        distanceText = stat("DISTANCE", "0.00 km")
-        timeText = stat("MOVING", "00:00")
-        accuracyText = stat("ACCURACY", "-- m")
+        maxText = statCard("MAX", "0.0 km/h")
+        avgText = statCard("AVERAGE", "0.0 km/h")
+        distanceText = statCard("DISTANCE", "0.00 km")
+        timeText = statCard("MOVING", "00:00")
+        accuracyText = statCard("ACCURACY", "—")
+        gpsText = statCard("GPS", "SEARCHING")
 
-        row1.addView(maxText, weightParams())
-        row1.addView(avgText, weightParams())
-        row1.addView(distanceText, weightParams())
-        row2.addView(timeText, weightParams())
-        row2.addView(accuracyText, weightParams())
-        stats.addView(row1, LinearLayout.LayoutParams(-1, 66))
-        stats.addView(row2, LinearLayout.LayoutParams(-1, 66))
-        root.addView(stats, LinearLayout.LayoutParams(-1, 132))
+        row1.addView(maxText, cardParams())
+        row1.addView(avgText, cardParams())
+        row1.addView(distanceText, cardParams())
+        row2.addView(timeText, cardParams())
+        row2.addView(accuracyText, cardParams())
+        row2.addView(gpsText, cardParams())
+        stats.addView(row1, LinearLayout.LayoutParams(-1, 0, 1f))
+        stats.addView(row2, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(stats, LinearLayout.LayoutParams(-1, dp(132)))
 
-        actionButton = Button(this).apply {
-            text = "START"
-            setOnClickListener { if (running) stopTracking() else startTracking() }
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        root.addView(actionButton, LinearLayout.LayoutParams(-1, 58))
+        actionButton = button("START", true).apply { setOnClickListener { if (running) stopTracking() else startTracking() } }
+        val reset = button("RESET", false).apply { setOnClickListener { resetTrip() } }
+        buttons.addView(actionButton, buttonParams(1f))
+        buttons.addView(reset, buttonParams(1f))
+        root.addView(buttons, LinearLayout.LayoutParams(-1, dp(54)))
 
-        val reset = Button(this).apply {
-            text = "RESET TRIP"
-            setOnClickListener { resetTrip() }
-        }
-        root.addView(reset, LinearLayout.LayoutParams(-1, 50))
         setContentView(root)
     }
 
-    private fun stat(label: String, value: String): TextView = TextView(this).apply {
-        text = "$label\n$value"
-        textSize = 13f
-        setTextColor(0xFFB9C1CD.toInt())
+    private fun chip(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 11f
+        typeface = Typeface.DEFAULT_BOLD
         gravity = Gravity.CENTER
+        setTextColor(ACCENT)
+        background = rounded(ACCENT_DARK, 50f)
     }
 
-    private fun weightParams() = LinearLayout.LayoutParams(0, -1, 1f)
+    private fun statCard(label: String, value: String) = TextView(this).apply {
+        text = "$label\n$value"
+        textSize = 13f
+        gravity = Gravity.CENTER
+        setLineSpacing(0f, 0.9f)
+        setTextColor(TEXT_SECONDARY)
+        background = rounded(CARD, 18f)
+        setPadding(dp(4), dp(3), dp(4), dp(3))
+    }
+
+    private fun button(text: String, primary: Boolean) = Button(this).apply {
+        this.text = text
+        textSize = 13f
+        typeface = Typeface.DEFAULT_BOLD
+        isAllCaps = false
+        setTextColor(if (primary) ColorTextOnAccent else TEXT_SECONDARY)
+        background = rounded(if (primary) ACCENT else CARD, 18f)
+        stateListAnimator = null
+    }
+
+    private fun cardParams() = LinearLayout.LayoutParams(0, -1, 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+    private fun buttonParams(weight: Float) = LinearLayout.LayoutParams(0, -1, weight).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) }
+    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius.toInt()).toFloat() }
+    private fun dp(v: Int) = (v * resources.displayMetrics.density + 0.5f).toInt()
 
     private fun startTracking() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -137,21 +184,17 @@ class MainActivity : Activity(), LocationListener {
             return
         }
         if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            statusText.text = "GPS: OFF • Enable location"
+            statusText.text = "GPS disabled • Enable location"
+            gpsText.text = "GPS\nOFF"
             return
         }
         running = true
         if (startTimeMs == 0L) startTimeMs = System.currentTimeMillis()
         actionButton.text = "STOP"
-        statusText.text = "GPS: SEARCHING • Offline"
+        statusText.text = "GPS searching • Offline"
+        gpsText.text = "GPS\nSEARCHING"
         try {
-            locationManager.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER,
-                500L,
-                0f,
-                this,
-                Looper.getMainLooper()
-            )
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500L, 0f, this, Looper.getMainLooper())
         } catch (_: SecurityException) {
             running = false
         }
@@ -161,7 +204,7 @@ class MainActivity : Activity(), LocationListener {
         running = false
         locationManager.removeUpdates(this)
         actionButton.text = "START"
-        statusText.text = "GPS: PAUSED • Offline"
+        statusText.text = "GPS paused • Offline"
     }
 
     private fun resetTrip() {
@@ -169,51 +212,46 @@ class MainActivity : Activity(), LocationListener {
         totalDistance = 0f
         movingTimeMs = 0L
         startTimeMs = if (running) System.currentTimeMillis() else 0L
-        lastMovingTimestampMs = 0L
+        lastLocation = null
+        lastAcceptedElapsedNs = 0L
         speedSamples = 0
         speedSum = 0.0
-        lastLocation = null
         filteredSpeed = 0f
         maxText.text = "MAX\n0.0 km/h"
-        avgText.text = "AVG\n0.0 km/h"
+        avgText.text = "AVERAGE\n0.0 km/h"
         distanceText.text = "DISTANCE\n0.00 km"
         timeText.text = "MOVING\n00:00"
-        accuracyText.text = "ACCURACY\n-- m"
-        speedView.setSpeed(0f, 0f)
+        accuracyText.text = "ACCURACY\n—"
+        gpsText.text = "GPS\nSEARCHING"
+        speedView.setSpeed(0f, 999f)
     }
 
     override fun onLocationChanged(location: Location) {
         val accuracyM = if (location.hasAccuracy()) location.accuracy else 999f
         val speedMps = if (location.hasSpeed()) max(0f, location.speed) else 0f
-        val speedAccuracy = if (android.os.Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond else Float.MAX_VALUE
+        val speedAccuracy = if (Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond else Float.MAX_VALUE
 
-        // Reject clearly unreliable fixes. This prevents GPS jumps from becoming huge speeds/distances.
         if (accuracyM > 35f) {
-            statusText.text = String.format(Locale.US, "GPS: WEAK • ±%.0f m", accuracyM)
+            statusText.text = String.format(Locale.US, "GPS weak • ±%.0f m", accuracyM)
             accuracyText.text = String.format(Locale.US, "ACCURACY\n±%.0f m", accuracyM)
+            gpsText.text = "GPS\nWEAK"
             return
         }
 
         val elapsedNs = location.elapsedRealtimeNanos
         val dt = if (lastLocation != null && elapsedNs > lastAcceptedElapsedNs) (elapsedNs - lastAcceptedElapsedNs) / 1_000_000_000f else 0f
         val previous = lastLocation
-
         if (previous != null && dt > 0f) {
             val jumpDistance = previous.distanceTo(location)
             val derivedSpeed = jumpDistance / dt
-            // Ignore physically implausible GPS jumps (> 250 km/h) unless the sensor itself agrees.
             if (derivedSpeed > 69.4f && speedMps < 55f) return
             if (jumpDistance > 120f && dt < 2.5f) return
             totalDistance += jumpDistance
-            if (speedMps > 0.5f) {
-                movingTimeMs += (dt * 1000f).toLong()
-                lastMovingTimestampMs = System.currentTimeMillis()
-            }
+            if (speedMps > 0.5f) movingTimeMs += (dt * 1000f).toLong()
         }
 
         val rawKmh = speedMps * 3.6f
         val quality = qualityFactor(accuracyM, speedAccuracy)
-        // Adaptive low-pass filter: excellent GPS remains responsive; weak GPS is smoother.
         val alpha = 0.25f + 0.55f * quality
         filteredSpeed += (rawKmh - filteredSpeed) * alpha
         if (abs(filteredSpeed) < 1.0f && rawKmh < 1.5f) filteredSpeed = 0f
@@ -229,27 +267,25 @@ class MainActivity : Activity(), LocationListener {
         val avg = if (speedSamples > 0) speedSum / speedSamples else 0.0
         speedView.setSpeed(filteredSpeed, accuracyM)
         maxText.text = String.format(Locale.US, "MAX\n%.1f km/h", maxSpeed)
-        avgText.text = String.format(Locale.US, "AVG\n%.1f km/h", avg)
+        avgText.text = String.format(Locale.US, "AVERAGE\n%.1f km/h", avg)
         distanceText.text = String.format(Locale.US, "DISTANCE\n%.2f km", totalDistance / 1000f)
         timeText.text = "MOVING\n${formatDuration(movingTimeMs)}"
         accuracyText.text = String.format(Locale.US, "ACCURACY\n±%.0f m", accuracyM)
-        statusText.text = statusLabel(accuracyM, speedAccuracy)
+
+        val label = when {
+            accuracyM <= 5f -> "EXCELLENT"
+            accuracyM <= 10f -> "GOOD"
+            accuracyM <= 20f -> "FAIR"
+            else -> "WEAK"
+        }
+        gpsText.text = "GPS\n$label"
+        statusText.text = if (speedAccuracy != Float.MAX_VALUE) String.format(Locale.US, "GPS %s • ±%.1f m/s • Offline", label, speedAccuracy) else "GPS $label • Offline"
     }
 
     private fun qualityFactor(accuracy: Float, speedAccuracy: Float): Float {
         val position = (1f - ((accuracy - 3f) / 27f)).coerceIn(0f, 1f)
         val speed = if (speedAccuracy == Float.MAX_VALUE) 0.55f else (1f - speedAccuracy / 5f).coerceIn(0f, 1f)
         return (position * 0.7f + speed * 0.3f).coerceIn(0f, 1f)
-    }
-
-    private fun statusLabel(accuracy: Float, speedAccuracy: Float): String {
-        val label = when {
-            accuracy <= 5f -> "EXCELLENT"
-            accuracy <= 10f -> "GOOD"
-            accuracy <= 20f -> "FAIR"
-            else -> "WEAK"
-        }
-        return if (speedAccuracy != Float.MAX_VALUE) String.format(Locale.US, "GPS: %s • ±%.1f m/s", label, speedAccuracy) else "GPS: $label • Offline"
     }
 
     private fun formatDuration(ms: Long): String {
@@ -261,11 +297,17 @@ class MainActivity : Activity(), LocationListener {
     }
 
     override fun onProviderDisabled(provider: String) {
-        if (provider == LocationManager.GPS_PROVIDER) statusText.text = "GPS: OFF"
+        if (provider == LocationManager.GPS_PROVIDER) {
+            statusText.text = "GPS disabled • Enable location"
+            gpsText.text = "GPS\nOFF"
+        }
     }
 
     override fun onProviderEnabled(provider: String) {
-        if (provider == LocationManager.GPS_PROVIDER) statusText.text = "GPS: READY • Offline"
+        if (provider == LocationManager.GPS_PROVIDER) {
+            statusText.text = "GPS ready • Offline"
+            gpsText.text = "GPS\nREADY"
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -291,42 +333,55 @@ class MainActivity : Activity(), LocationListener {
         }
 
         override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
             val cx = width / 2f
             val cy = height / 2f
-            val radius = min(width, height) * 0.39f
+            val radius = min(width, height) * 0.35f
             val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
 
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 18f
+            paint.strokeWidth = 15f
             paint.strokeCap = Paint.Cap.ROUND
-            paint.color = 0xFF252A33.toInt()
+            paint.color = 0xFF222733.toInt()
             canvas.drawArc(rect, 135f, 270f, false, paint)
 
             paint.color = when {
-                accuracy <= 5f -> 0xFF55D98A.toInt()
-                accuracy <= 10f -> 0xFFE8D66A.toInt()
-                accuracy <= 20f -> 0xFFFFA64D.toInt()
-                else -> 0xFF777F8C.toInt()
+                accuracy <= 5f -> 0xFF54D58A.toInt()
+                accuracy <= 10f -> 0xFFE4D45E.toInt()
+                accuracy <= 20f -> 0xFFFFA34D.toInt()
+                else -> 0xFF5E6674.toInt()
             }
             canvas.drawArc(rect, 135f, 270f * (speed / maxGauge), false, paint)
 
             paint.style = Paint.Style.FILL
             paint.textAlign = Paint.Align.CENTER
-            paint.color = 0xFF8D96A3.toInt()
-            paint.textSize = radius * 0.12f
-            canvas.drawText("GPS SPEED", cx, cy - radius * 0.48f, paint)
+            paint.typeface = Typeface.create("sans", Typeface.NORMAL)
+            paint.color = 0xFF89929F.toInt()
+            paint.textSize = radius * 0.11f
+            canvas.drawText("GPS SPEED", cx, cy - radius * 0.43f, paint)
 
-            paint.color = 0xFFF7F8FA.toInt()
-            paint.textSize = radius * 0.52f
+            paint.color = 0xFFF5F7FA.toInt()
+            paint.textSize = radius * 0.48f
             canvas.drawText(String.format(Locale.US, "%.1f", speed), cx, cy + radius * 0.08f, paint)
 
-            paint.color = 0xFF9EA6B3.toInt()
-            paint.textSize = radius * 0.13f
-            canvas.drawText("km/h", cx, cy + radius * 0.29f, paint)
+            paint.color = 0xFF9BA4B1.toInt()
+            paint.textSize = radius * 0.12f
+            canvas.drawText("km/h", cx, cy + radius * 0.27f, paint)
 
-            paint.color = 0xFF707987.toInt()
-            paint.textSize = radius * 0.085f
-            canvas.drawText(if (accuracy < 900f) String.format(Locale.US, "GPS ±%.0f m", accuracy) else "WAITING FOR GPS", cx, cy + radius * 0.43f, paint)
+            paint.color = 0xFF697280.toInt()
+            paint.textSize = radius * 0.075f
+            canvas.drawText(if (accuracy < 900f) String.format(Locale.US, "GPS ±%.0f m", accuracy) else "WAITING FOR GPS", cx, cy + radius * 0.40f, paint)
         }
+    }
+
+    companion object {
+        private const val BG = 0xFF07090D.toInt()
+        private const val CARD = 0xFF11151D.toInt()
+        private const val ACCENT = 0xFF65D6FF.toInt()
+        private const val ACCENT_DARK = 0xFF12303A.toInt()
+        private const val TEXT = 0xFFF5F7FA.toInt()
+        private const val TEXT_SECONDARY = 0xFFC1C8D2.toInt()
+        private const val MUTED = 0xFF737D8B.toInt()
+        private const val ColorTextOnAccent = 0xFF071017.toInt()
     }
 }
