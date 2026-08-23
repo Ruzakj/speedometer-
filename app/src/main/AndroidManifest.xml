@@ -12,6 +12,7 @@
         <activity
             android:name=".MainActivityV2"
             android:screenOrientation="portrait"
+            android:resizeableActivity="true"
             android:exported="true"
             android:supportsPictureInPicture="true"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation">
