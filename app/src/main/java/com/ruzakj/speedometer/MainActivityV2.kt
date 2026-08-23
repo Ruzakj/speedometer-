@@ -5,325 +5,91 @@ import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.pm.PackageManager
-import android.content.res.Configuration
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
-import android.os.Build
-import android.os.Bundle
-import android.os.Looper
-import android.util.Rational
-import android.view.Gravity
-import android.view.View
-import android.view.WindowInsets
-import android.view.WindowManager
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.graphics.*
+import android.location.*
+import android.os.*
+import android.view.*
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.*
 
 class MainActivityV2 : Activity(), LocationListener {
-    private lateinit var root: LinearLayout
-    private lateinit var header: LinearLayout
-    private lateinit var stats: LinearLayout
-    private lateinit var controls: LinearLayout
-    private lateinit var speedView: SpeedView
-    private lateinit var statusText: TextView
-    private lateinit var gpsText: TextView
-    private lateinit var accuracyText: TextView
-    private lateinit var maxText: TextView
-    private lateinit var avgText: TextView
-    private lateinit var distanceText: TextView
-    private lateinit var timeText: TextView
-    private lateinit var startButton: Button
-    private lateinit var locationManager: LocationManager
+    private lateinit var ui: Dash
+    private lateinit var lm: LocationManager
+    private val handler=Handler(Looper.getMainLooper())
+    private var running=false
+    private var last:Location?=null
+    private var lastNs=0L
+    private var speed=0f
+    private var maxSpeed=0f
+    private var distance=0f
+    private var movingMs=0L
+    private var samples=0
+    private var sum=0.0
+    private var accuracy=999f
+    private var speedAccuracy=Float.MAX_VALUE
+    private val tick=object:Runnable{override fun run(){ui.invalidate();handler.postDelayed(this,1000)}}
 
-    private var running = false
-    private var lastLocation: Location? = null
-    private var lastAcceptedNs = 0L
-    private var filteredSpeed = 0f
-    private var maxSpeed = 0f
-    private var totalDistance = 0f
-    private var movingTimeMs = 0L
-    private var speedSamples = 0
-    private var speedSum = 0.0
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun onCreate(b:Bundle?){super.onCreate(b)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        window.statusBarColor = BG
-        window.navigationBarColor = BG
-        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        buildUi()
-        configureInsets()
-        configurePip()
+        window.statusBarColor=BG;window.navigationBarColor=BG
+        if(Build.VERSION.SDK_INT>=29){window.isStatusBarContrastEnforced=false;window.isNavigationBarContrastEnforced=false}
+        lm=getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        ui=Dash(this)
+        ui.setOnApplyWindowInsetsListener{v,i->if(Build.VERSION.SDK_INT>=30){val x=i.getInsets(WindowInsets.Type.systemBars());v.setPadding(dp(14),x.top+dp(8),dp(14),x.bottom+dp(8))};i}
+        setContentView(ui);handler.post(tick)
     }
+    private fun start(){
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),10);return}
+        if(!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)){ui.msg="GPS OFF • ENABLE LOCATION";ui.invalidate();return}
+        running=true;ui.msg="GPS ACTIVE • OFFLINE"
+        try{lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,500L,0f,this,Looper.getMainLooper())}catch(_:SecurityException){running=false}
+        ui.invalidate()
+    }
+    private fun stop(){running=false;lm.removeUpdates(this);ui.msg="GPS PAUSED • OFFLINE";ui.invalidate()}
+    private fun reset(){maxSpeed=0f;distance=0f;movingMs=0;samples=0;sum=0.0;last=null;lastNs=0;speed=0f;accuracy=999f;speedAccuracy=Float.MAX_VALUE;ui.msg=if(running)"GPS ACTIVE • OFFLINE" else "READY • OFFLINE";ui.invalidate()}
+    override fun onLocationChanged(l:Location){
+        accuracy=if(l.hasAccuracy())l.accuracy else 999f
+        val raw=if(l.hasSpeed())max(0f,l.speed) else 0f
+        speedAccuracy=if(Build.VERSION.SDK_INT>=26&&l.hasSpeedAccuracy())l.speedAccuracyMetersPerSecond else Float.MAX_VALUE
+        if(accuracy>35f){ui.msg=String.format(Locale.US,"GPS WEAK • ±%.0f m",accuracy);ui.invalidate();return}
+        val ns=l.elapsedRealtimeNanos;val old=last;val dt=if(old!=null&&ns>lastNs)(ns-lastNs)/1e9f else 0f
+        if(old!=null&&dt>0){val jump=old.distanceTo(l);val derived=jump/dt;if(derived>69.4f&&raw<55f)return;if(jump>120f&&dt<2.5f)return;distance+=jump;if(raw>.5f)movingMs+=(dt*1000).toLong()}
+        val q=quality();val target=raw*3.6f;val alpha=.22f+.58f*q;speed+=(target-speed)*alpha;if(abs(speed)<1f&&target<1.5f)speed=0f
+        last=Location(l);lastNs=ns;maxSpeed=max(maxSpeed,speed);if(q>.35f){samples++;sum+=speed};ui.invalidate()
+    }
+    private fun quality():Float{val p=(1f-(accuracy-3f)/27f).coerceIn(0f,1f);val v=if(speedAccuracy==Float.MAX_VALUE).55f else (1f-speedAccuracy/5f).coerceIn(0f,1f);return(p*.7f+v*.3f).coerceIn(0f,1f)}
+    private fun avg()=if(samples>0)(sum/samples).toFloat() else 0f
+    private fun gps()=when{accuracy<=5f->"EXCELLENT";accuracy<=10f->"GOOD";accuracy<=20f->"FAIR";accuracy<900f->"WEAK";else->"SEARCHING"}
+    private fun time():String{val t=movingMs/1000;return if(t>=3600)String.format(Locale.US,"%02d:%02d:%02d",t/3600,t%3600/60,t%60)else String.format(Locale.US,"%02d:%02d",t/60,t%60)}
+    private fun pip(){if(Build.VERSION.SDK_INT>=26)enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(9,16)).build())}
+    override fun onRequestPermissionsResult(r:Int,p:Array<out String>,g:IntArray){super.onRequestPermissionsResult(r,p,g);if(r==10&&g.isNotEmpty()&&g[0]==PackageManager.PERMISSION_GRANTED)start()}
+    override fun onProviderDisabled(p:String){if(p==LocationManager.GPS_PROVIDER){ui.msg="GPS OFF • ENABLE LOCATION";ui.invalidate()}}
+    override fun onProviderEnabled(p:String){if(p==LocationManager.GPS_PROVIDER){ui.msg="GPS READY • OFFLINE";ui.invalidate()}}
+    override fun onDestroy(){handler.removeCallbacksAndMessages(null);lm.removeUpdates(this);super.onDestroy()}
 
-    private fun buildUi() {
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(BG)
-            setPadding(dp(16), dp(8), dp(16), dp(8))
+    private inner class Dash(c:Context):View(c){
+        private val p=Paint(3);private val fill=Paint(3);var msg="READY • OFFLINE";private var a=RectF();private var b=RectF();private var d=RectF()
+        override fun onDraw(c:Canvas){super.onDraw(c);c.drawColor(BG);val w=width.toFloat();val h=height.toFloat();val l=dp(14).toFloat();val r=w-l;val cw=r-l
+            txt(c,"SPEEDOMETER",l,dp(25).toFloat(),19,TEXT,true,Paint.Align.LEFT);txt(c,if(running)"● GPS ACTIVE" else "○ GPS READY",l,dp(46).toFloat(),10,if(running)GREEN:MUTED,true,Paint.Align.LEFT)
+            pill(c,r-dp(84),dp(12),dp(84),dp(28),"OFFLINE",CYAN);pill(c,r-dp(170),dp(12),dp(78),dp(28),gps(),GREEN)
+            val top=dp(62).toFloat();val gh=min(dp(400).toFloat(),h*.49f);val box=RectF(l,top,r,top+gh);card(c,box,PANEL)
+            val cx=w/2f;val cy=box.top+gh*.57f;val rad=min(cw*.39f,gh*.43f);val arc=RectF(cx-rad,cy-rad,cx+rad,cy+rad)
+            p.style=Paint.Style.STROKE;p.strokeCap=Paint.Cap.ROUND;p.strokeWidth=dp(12).toFloat();p.color=TRACK;c.drawArc(arc,140f,260f,false,p);p.color=gcol();c.drawArc(arc,140f,260f*(speed/180f).coerceIn(0f,1f),false,p)
+            p.strokeWidth=dp(2).toFloat();for(i in 0..9){val an=Math.toRadians(140+i*260.0/9);val rr1=rad-dp(18);val rr2=rad-dp(5);p.color=if(i*20<=speed)gcol() else GRID;c.drawLine(cx+cos(an).toFloat()*rr1,cy+sin(an).toFloat()*rr1,cx+cos(an).toFloat()*rr2,cy+sin(an).toFloat()*rr2,p)}
+            txt(c,"GPS SPEED",cx,cy-dp(52).toFloat(),12,MUTED,true,Paint.Align.CENTER);txt(c,String.format(Locale.US,"%.1f",speed),cx,cy+dp(20).toFloat(),64,TEXT,false,Paint.Align.CENTER);txt(c,"km/h",cx,cy+dp(49).toFloat(),16,MUTED,false,Paint.Align.CENTER);txt(c,if(accuracy<900)String.format(Locale.US,"GPS ±%.0f m",accuracy)else"WAITING FOR GPS",cx,cy+dp(76).toFloat(),11,gcol(),true,Paint.Align.CENTER)
+            val it=box.bottom+dp(10);val ih=dp(94).toFloat();card(c,RectF(l,it,r,it+ih),PANEL);txt(c,"RIDE DATA",l+dp(14),it+dp(20).toFloat(),10,MUTED,true,Paint.Align.LEFT)
+            info(c,"AVG",String.format(Locale.US,"%.1f km/h",avg()),l+dp(14),it);info(c,"MAX",String.format(Locale.US,"%.1f km/h",maxSpeed),l+dp(112),it);info(c,"TRIP",String.format(Locale.US,"%.2f km",distance/1000),l+dp(210),it);info(c,"TIME",time(),r-dp(78),it)
+            txt(c,"ACCURACY",l+dp(14),it+dp(76).toFloat(),9,MUTED,true,Paint.Align.LEFT);txt(c,if(accuracy<900)String.format(Locale.US,"±%.0f m",accuracy)else"—",l+dp(14),it+dp(91).toFloat(),13,TEXT,true,Paint.Align.LEFT);txt(c,"GPS",l+dp(112),it+dp(76).toFloat(),9,MUTED,true,Paint.Align.LEFT);txt(c,gps(),l+dp(112),it+dp(91).toFloat(),13,gcol(),true,Paint.Align.LEFT);txt(c,"MODE",l+dp(210),it+dp(76).toFloat(),9,MUTED,true,Paint.Align.LEFT);txt(c,"SPORT",l+dp(210),it+dp(91).toFloat(),13,CYAN,true,Paint.Align.LEFT)
+            val by=h-dp(65).toFloat();a=RectF(l,by,l+cw*.46f,by+dp(48));b=RectF(l+cw*.48f,by,l+cw*.72f,by+dp(48));d=RectF(r-cw*.24f,by,r,by+dp(48));action(c,a,if(running)"STOP"else"START",running);action(c,b,"RESET",false);action(c,d,"PIP",false);txt(c,msg,w/2f,by-dp(8).toFloat(),10,MUTED,true,Paint.Align.CENTER)
         }
-
-        header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val titleBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        titleBox.addView(TextView(this).apply {
-            text = "SPEEDOMETER"
-            textSize = 20f
-            typeface = Typeface.create("sans", Typeface.BOLD)
-            setTextColor(TEXT)
-        }, LinearLayout.LayoutParams(-1, dp(30)))
-        statusText = TextView(this).apply {
-            text = "GPS READY  •  OFFLINE"
-            textSize = 11f
-            setTextColor(ACCENT)
-        }
-        titleBox.addView(statusText, LinearLayout.LayoutParams(-1, dp(20)))
-        header.addView(titleBox, LinearLayout.LayoutParams(0, dp(54), 1f))
-        header.addView(TextView(this).apply {
-            text = "GPS ONLY"
-            textSize = 10f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(ACCENT)
-            background = rounded(ACCENT_DARK, 40)
-        }, LinearLayout.LayoutParams(dp(78), dp(32)))
-        root.addView(header, LinearLayout.LayoutParams(-1, dp(58)))
-
-        speedView = SpeedView(this)
-        root.addView(speedView, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        stats = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val r1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val r2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        maxText = stat("MAX", "0.0 km/h")
-        avgText = stat("AVERAGE", "0.0 km/h")
-        distanceText = stat("DISTANCE", "0.00 km")
-        timeText = stat("MOVING", "00:00")
-        accuracyText = stat("ACCURACY", "—")
-        gpsText = stat("GPS", "WAITING")
-        r1.addView(maxText, cellParams()); r1.addView(avgText, cellParams()); r1.addView(distanceText, cellParams())
-        r2.addView(timeText, cellParams()); r2.addView(accuracyText, cellParams()); r2.addView(gpsText, cellParams())
-        stats.addView(r1, LinearLayout.LayoutParams(-1, 0, 1f)); stats.addView(r2, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(stats, LinearLayout.LayoutParams(-1, dp(116)))
-
-        controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        startButton = actionButton("START", true) { if (running) stopTracking() else requestOrStart() }
-        controls.addView(startButton, buttonParams())
-        controls.addView(actionButton("PIP", false) { enterPip() }, buttonParams())
-        controls.addView(actionButton("RESET", false) { resetTrip() }, buttonParams())
-        root.addView(controls, LinearLayout.LayoutParams(-1, dp(58)))
-        setContentView(root)
+        private fun info(c:Canvas,label:String,value:String,x:Float,y:Float){txt(c,label,x,y+dp(43).toFloat(),9,MUTED,true,Paint.Align.LEFT);txt(c,value,x,y+dp(61).toFloat(),13,TEXT,true,Paint.Align.LEFT)}
+        private fun action(c:Canvas,q:RectF,s:String,on:Boolean){fill.color=if(on)GREEN else PANEL;c.drawRoundRect(q,dp(14).toFloat(),dp(14).toFloat(),fill);p.style=Paint.Style.STROKE;p.strokeWidth=dp(1).toFloat();p.color=if(on)GREEN else GRID;c.drawRoundRect(q,dp(14).toFloat(),dp(14).toFloat(),p);txt(c,s,q.centerX(),q.centerY()+dp(5).toFloat(),12,if(on)BG else TEXT,true,Paint.Align.CENTER)}
+        private fun pill(c:Canvas,x:Float,y:Float,w:Float,h:Float,s:String,col:Int){fill.color=if(s=="OFFLINE")PANEL else if(s=="GOOD"||s=="EXCELLENT")GREEN_DARK else PANEL;c.drawRoundRect(RectF(x,y,x+w,y+h),h/2,h/2,fill);txt(c,s,x+w/2,y+h*.67f,9,col,true,Paint.Align.CENTER)}
+        private fun card(c:Canvas,q:RectF,col:Int){fill.color=col;c.drawRoundRect(q,dp(20).toFloat(),dp(20).toFloat(),fill)}
+        private fun gcol()=when{accuracy<=5->GREEN;accuracy<=10->CYAN;accuracy<=20->AMBER;else->MUTED}
+        private fun txt(c:Canvas,s:String,x:Float,y:Float,z:Float,col:Int,bold:Boolean,align:Paint.Align){p.style=Paint.Style.FILL;p.textAlign=align;p.typeface=if(bold)Typeface.create("sans",Typeface.BOLD)else Typeface.create("sans",Typeface.NORMAL);p.textSize=z*resources.displayMetrics.scaledDensity;p.color=col;c.drawText(s,x,y,p)}
+        override fun onTouchEvent(e:MotionEvent):Boolean{if(e.action==MotionEvent.ACTION_UP){when{a.contains(e.x,e.y)->if(running)stop()else start();b.contains(e.x,e.y)->reset();d.contains(e.x,e.y)->pip()}};return true}
     }
-
-    private fun configureInsets() {
-        root.setOnApplyWindowInsetsListener { v, insets ->
-            val top: Int
-            val bottom: Int
-            if (Build.VERSION.SDK_INT >= 30) {
-                val bars = insets.getInsets(WindowInsets.Type.systemBars())
-                top = bars.top; bottom = bars.bottom
-            } else {
-                @Suppress("DEPRECATION") val t = insets.systemWindowInsetTop
-                @Suppress("DEPRECATION") val b = insets.systemWindowInsetBottom
-                top = t; bottom = b
-            }
-            v.setPadding(dp(16), top + dp(8), dp(16), bottom + dp(8))
-            insets
-        }
-        root.requestApplyInsets()
-    }
-
-    private fun configurePip() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            setPictureInPictureParams(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
-        }
-    }
-
-    private fun enterPip() {
-        if (!running || Build.VERSION.SDK_INT < 26) return
-        enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
-    }
-
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (running && Build.VERSION.SDK_INT >= 26 && !isInPictureInPictureMode) enterPip()
-    }
-
-    override fun onPictureInPictureModeChanged(inPip: Boolean, newConfig: Configuration) {
-        super.onPictureInPictureModeChanged(inPip, newConfig)
-        header.visibility = if (inPip) View.GONE else View.VISIBLE
-        stats.visibility = if (inPip) View.GONE else View.VISIBLE
-        controls.visibility = if (inPip) View.GONE else View.VISIBLE
-        speedView.pipMode = inPip
-        speedView.invalidate()
-    }
-
-    private fun requestOrStart() {
-        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQUEST_LOCATION)
-            statusText.text = "ALLOW PRECISE LOCATION TO START"
-            return
-        }
-        startTracking()
-    }
-
-    private fun startTracking() {
-        if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            statusText.text = "GPS OFF  •  ENABLE LOCATION"
-            gpsText.text = "GPS\nOFF"
-            return
-        }
-        running = true
-        startButton.text = "STOP"
-        statusText.text = "GPS SEARCHING  •  OFFLINE"
-        gpsText.text = "GPS\nSEARCHING"
-        try {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500L, 0f, this, Looper.getMainLooper())
-        } catch (_: SecurityException) {
-            running = false
-            statusText.text = "LOCATION PERMISSION REQUIRED"
-        }
-    }
-
-    private fun stopTracking() {
-        running = false
-        locationManager.removeUpdates(this)
-        startButton.text = "START"
-        statusText.text = "GPS PAUSED  •  OFFLINE"
-    }
-
-    private fun resetTrip() {
-        maxSpeed = 0f; totalDistance = 0f; movingTimeMs = 0L; lastLocation = null; lastAcceptedNs = 0L
-        filteredSpeed = 0f; speedSamples = 0; speedSum = 0.0
-        maxText.text = "MAX\n0.0 km/h"; avgText.text = "AVERAGE\n0.0 km/h"; distanceText.text = "DISTANCE\n0.00 km"
-        timeText.text = "MOVING\n00:00"; accuracyText.text = "ACCURACY\n—"; gpsText.text = "GPS\nWAITING"
-        speedView.setSpeed(0f, 999f)
-    }
-
-    override fun onLocationChanged(location: Location) {
-        val accuracy = if (location.hasAccuracy()) location.accuracy else 999f
-        val rawMps = if (location.hasSpeed()) max(0f, location.speed) else 0f
-        val speedAccuracy = if (Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond else Float.MAX_VALUE
-        if (accuracy > 35f) {
-            statusText.text = String.format(Locale.US, "GPS WEAK  •  ±%.0f m", accuracy)
-            accuracyText.text = String.format(Locale.US, "ACCURACY\n±%.0f m", accuracy)
-            gpsText.text = "GPS\nWEAK"
-            return
-        }
-
-        val nowNs = location.elapsedRealtimeNanos
-        val dt = if (lastLocation != null && nowNs > lastAcceptedNs) (nowNs - lastAcceptedNs) / 1_000_000_000f else 0f
-        val previous = lastLocation
-        if (previous != null && dt > 0f) {
-            val d = previous.distanceTo(location)
-            val derived = d / dt
-            if (derived > 69.4f && rawMps < 55f) return
-            if (d > 120f && dt < 2.5f) return
-            totalDistance += d
-            if (rawMps > 0.5f) movingTimeMs += (dt * 1000f).toLong()
-        }
-
-        val rawKmh = rawMps * 3.6f
-        val quality = qualityFactor(accuracy, speedAccuracy)
-        val alpha = 0.25f + 0.55f * quality
-        filteredSpeed += (rawKmh - filteredSpeed) * alpha
-        if (rawKmh < 1.5f && filteredSpeed < 1.0f) filteredSpeed = 0f
-        lastLocation = Location(location); lastAcceptedNs = nowNs
-        maxSpeed = max(maxSpeed, filteredSpeed)
-        if (quality > 0.35f) { speedSamples++; speedSum += filteredSpeed }
-        val avg = if (speedSamples > 0) speedSum / speedSamples else 0.0
-        speedView.setSpeed(filteredSpeed, accuracy)
-        maxText.text = String.format(Locale.US, "MAX\n%.1f km/h", maxSpeed)
-        avgText.text = String.format(Locale.US, "AVERAGE\n%.1f km/h", avg)
-        distanceText.text = String.format(Locale.US, "DISTANCE\n%.2f km", totalDistance / 1000f)
-        timeText.text = "MOVING\n${duration(movingTimeMs)}"
-        accuracyText.text = String.format(Locale.US, "ACCURACY\n±%.0f m", accuracy)
-        val label = when { accuracy <= 5f -> "EXCELLENT"; accuracy <= 10f -> "GOOD"; accuracy <= 20f -> "FAIR"; else -> "WEAK" }
-        gpsText.text = "GPS\n$label"
-        statusText.text = if (speedAccuracy != Float.MAX_VALUE) String.format(Locale.US, "GPS %s  •  ±%.1f m/s  •  OFFLINE", label, speedAccuracy) else "GPS $label  •  OFFLINE"
-    }
-
-    private fun qualityFactor(positionAccuracy: Float, speedAccuracy: Float): Float {
-        val p = (1f - ((positionAccuracy - 3f) / 27f)).coerceIn(0f, 1f)
-        val s = if (speedAccuracy == Float.MAX_VALUE) 0.55f else (1f - speedAccuracy / 5f).coerceIn(0f, 1f)
-        return (p * 0.7f + s * 0.3f).coerceIn(0f, 1f)
-    }
-
-    private fun duration(ms: Long): String {
-        val total = ms / 1000; val h = total / 3600; val m = (total % 3600) / 60; val s = total % 60
-        return if (h > 0) String.format(Locale.US, "%02d:%02d:%02d", h, m, s) else String.format(Locale.US, "%02d:%02d", m, s)
-    }
-
-    override fun onProviderDisabled(provider: String) { if (provider == LocationManager.GPS_PROVIDER) { statusText.text = "GPS OFF"; gpsText.text = "GPS\nOFF" } }
-    override fun onProviderEnabled(provider: String) { if (provider == LocationManager.GPS_PROVIDER) { statusText.text = "GPS READY  •  OFFLINE"; gpsText.text = "GPS\nREADY" } }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, results)
-        if (requestCode == REQUEST_LOCATION) {
-            val fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            if (fine) startTracking() else statusText.text = "PRECISE LOCATION REQUIRED"
-        }
-    }
-
-    override fun onDestroy() { locationManager.removeUpdates(this); super.onDestroy() }
-
-    private fun stat(label: String, value: String) = TextView(this).apply {
-        text = "$label\n$value"; textSize = 11f; gravity = Gravity.CENTER; setTextColor(TEXT_SECONDARY); setPadding(dp(2), dp(2), dp(2), dp(2)); background = rounded(CARD, 16)
-    }
-
-    private fun actionButton(label: String, primary: Boolean, action: () -> Unit) = Button(this).apply {
-        text = label; textSize = 12f; typeface = Typeface.DEFAULT_BOLD; isAllCaps = false; setTextColor(if (primary) 0xFF07100A.toInt() else TEXT_SECONDARY); background = rounded(if (primary) ACCENT else CARD, 16); stateListAnimator = null; setOnClickListener { action() }
-    }
-
-    private fun cellParams() = LinearLayout.LayoutParams(0, -1, 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
-    private fun buttonParams() = LinearLayout.LayoutParams(0, -1, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) }
-    private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radiusDp).toFloat() }
-    private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
-
-    private class SpeedView(context: Context) : View(context) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private var speed = 0f
-        private var accuracy = 999f
-        var pipMode = false
-        fun setSpeed(value: Float, accuracyM: Float) { speed = value.coerceIn(0f, 180f); accuracy = accuracyM; invalidate() }
-        override fun onDraw(canvas: Canvas) {
-            val cx = width / 2f; val cy = height / 2f; val radius = min(width, height) * if (pipMode) 0.39f else 0.35f
-            val rect = RectF(cx-radius, cy-radius, cx+radius, cy+radius)
-            paint.style = Paint.Style.STROKE; paint.strokeWidth = if (pipMode) 12f else 15f; paint.strokeCap = Paint.Cap.ROUND
-            paint.color = 0xFF222733.toInt(); canvas.drawArc(rect, 135f, 270f, false, paint)
-            paint.color = when { accuracy <= 5f -> 0xFF54D58A.toInt(); accuracy <= 10f -> 0xFFE4D45E.toInt(); accuracy <= 20f -> 0xFFFFA34D.toInt(); else -> 0xFF5E6674.toInt() }
-            canvas.drawArc(rect, 135f, 270f * (speed / 180f), false, paint)
-            paint.style = Paint.Style.FILL; paint.textAlign = Paint.Align.CENTER; paint.typeface = Typeface.create("sans", Typeface.NORMAL)
-            paint.color = 0xFF89929F.toInt(); paint.textSize = radius * 0.11f; canvas.drawText("GPS SPEED", cx, cy-radius*0.43f, paint)
-            paint.color = 0xFFF5F7FA.toInt(); paint.textSize = radius * if (pipMode) 0.46f else 0.48f; canvas.drawText(String.format(Locale.US, "%.1f", speed), cx, cy+radius*0.08f, paint)
-            paint.color = 0xFF9BA4B1.toInt(); paint.textSize = radius * 0.12f; canvas.drawText("km/h", cx, cy+radius*0.27f, paint)
-            paint.color = 0xFF697280.toInt(); paint.textSize = radius * 0.075f; canvas.drawText(if (accuracy < 900f) String.format(Locale.US, "GPS ±%.0f m", accuracy) else "WAITING FOR GPS", cx, cy+radius*0.43f, paint)
-        }
-    }
-
-    companion object {
-        private const val REQUEST_LOCATION = 100
-        private const val BG = 0xFF07090E.toInt()
-        private const val CARD = 0xFF11151D.toInt()
-        private const val TEXT = 0xFFF5F7FA.toInt()
-        private const val TEXT_SECONDARY = 0xFFB8C0CC.toInt()
-        private const val ACCENT = 0xFF6EE7A0.toInt()
-        private const val ACCENT_DARK = 0xFF173525.toInt()
-    }
+    private fun dp(v:Int)=(v*resources.displayMetrics.density+.5f).toInt()
+    companion object{private const val BG=0xFF070A0E.toInt();private const val PANEL=0xFF10151B.toInt();private const val TRACK=0xFF28323C.toInt();private const val GRID=0xFF34414D.toInt();private const val TEXT=0xFFF3F6F8.toInt();private const val MUTED=0xFF7F8B96.toInt();private const val GREEN=0xFF54E08A.toInt();private const val GREEN_DARK=0xFF123B29.toInt();private const val CYAN=0xFF52D7E9.toInt();private const val AMBER=0xFFF2B95D.toInt()}
 }
