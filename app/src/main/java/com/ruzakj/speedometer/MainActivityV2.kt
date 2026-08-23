@@ -1,6 +1,8 @@
 package com.ruzakj.speedometer
 
 import android.Manifest
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.PictureInPictureParams
@@ -93,11 +95,13 @@ class MainActivityV2 : Activity(), LocationListener {
                 }
                 dash.invalidate()
             }
-            doOnEnd = {
-                introAnimating = false
-                introSpeed = 0f
-                dash.invalidate()
-            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    introAnimating = false
+                    introSpeed = 0f
+                    dash.invalidate()
+                }
+            })
             start()
         }
     }
@@ -109,7 +113,7 @@ class MainActivityV2 : Activity(), LocationListener {
 
     private fun easeInOutCubic(x: Float): Float {
         val p = x.coerceIn(0f, 1f)
-        return if (p < 0.5f) 4f * p * p * p else 1f - ((-2f * p + 2f).let { it * it * it }) / 2f
+        return if (p < 0.5f) 4f * p * p * p else 1f - ((-2f * p + 2f) * (-2f * p + 2f) * (-2f * p + 2f)) / 2f
     }
 
     private fun startTracking() {
@@ -380,7 +384,7 @@ class MainActivityV2 : Activity(), LocationListener {
             val leftWheel = cx - width * 0.30f
             val rightWheel = cx + width * 0.30f
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = df(1.8f.toInt())
+            paint.strokeWidth = df(2)
             paint.color = CYAN
             canvas.drawCircle(leftWheel, cy + height * 0.20f, wheelR, paint)
             canvas.drawCircle(rightWheel, cy + height * 0.20f, wheelR, paint)
