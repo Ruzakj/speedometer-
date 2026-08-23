@@ -6,38 +6,51 @@ import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.*
-import android.location.*
-import android.os.*
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Rational
-import android.view.*
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowManager
 import java.util.Locale
-import kotlin.math.*
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
 
 class MainActivityV2 : Activity(), LocationListener {
-    private lateinit var ui: Dash
-    private lateinit var lm: LocationManager
+    private lateinit var dash: Dashboard
+    private lateinit var locationManager: LocationManager
     private val handler = Handler(Looper.getMainLooper())
-    private var running = false
-    private var last: Location? = null
-    private var lastNs = 0L
-    private var speed = 0f
-    private var maxSpeed = 0f
-    private var distance = 0f
-    private var movingMs = 0L
-    private var samples = 0
-    private var sum = 0.0
-    private var accuracy = 999f
-    private var speedAccuracy = Float.MAX_VALUE
 
-    private val tick = object : Runnable {
+    private var tracking = false
+    private var lastLocation: Location? = null
+    private var lastElapsedNs = 0L
+    private var speedKmh = 0f
+    private var maxKmh = 0f
+    private var distanceM = 0f
+    private var movingMs = 0L
+    private var averageSum = 0.0
+    private var averageSamples = 0
+    private var accuracyM = 999f
+    private var speedAccuracyMps = Float.MAX_VALUE
+
+    private val refresh = object : Runnable {
         override fun run() {
-            ui.invalidate()
-            handler.postDelayed(this, 1000L)
+            dash.invalidate()
+            handler.postDelayed(this, 500L)
         }
     }
 
-    override fun onCreate(b: Bundle?) {
-        super.onCreate(b)
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.statusBarColor = BG
         window.navigationBarColor = BG
@@ -45,130 +58,155 @@ class MainActivityV2 : Activity(), LocationListener {
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
-        lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        ui = Dash(this)
-        ui.setOnApplyWindowInsetsListener { v, i ->
-            if (Build.VERSION.SDK_INT >= 30) {
-                val x = i.getInsets(WindowInsets.Type.systemBars())
-                v.setPadding(dp(14), x.top + dp(8), dp(14), x.bottom + dp(8))
+
+        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        dash = Dashboard(this)
+        dash.setOnApplyWindowInsetsListener { view, insets ->
+            val bars = if (Build.VERSION.SDK_INT >= 30) {
+                insets.getInsets(WindowInsets.Type.systemBars())
+            } else null
+            if (bars != null) {
+                view.setPadding(dp(16), bars.top + dp(8), dp(16), bars.bottom + dp(8))
+            } else {
+                view.setPadding(dp(16), dp(24), dp(16), dp(16))
             }
-            i
+            insets
         }
-        setContentView(ui)
-        handler.post(tick)
+        setContentView(dash)
+        handler.post(refresh)
     }
 
-    private fun start() {
+    private fun startTracking() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
-                10
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ),
+                REQUEST_LOCATION
             )
             return
         }
-        if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            ui.msg = "GPS OFF • ENABLE LOCATION"
-            ui.invalidate()
+        if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            dash.message = "GPS OFF • ENABLE LOCATION"
+            dash.invalidate()
             return
         }
-        running = true
-        ui.msg = "GPS ACTIVE • OFFLINE"
+
+        tracking = true
+        dash.message = "GPS ACTIVE • OFFLINE"
         try {
-            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500L, 0f, this, Looper.getMainLooper())
+            locationManager.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER,
+                500L,
+                0f,
+                this,
+                Looper.getMainLooper()
+            )
         } catch (_: SecurityException) {
-            running = false
+            tracking = false
+            dash.message = "LOCATION PERMISSION REQUIRED"
         }
-        ui.invalidate()
+        dash.invalidate()
     }
 
-    private fun stop() {
-        running = false
-        lm.removeUpdates(this)
-        ui.msg = "GPS PAUSED • OFFLINE"
-        ui.invalidate()
+    private fun stopTracking() {
+        tracking = false
+        locationManager.removeUpdates(this)
+        dash.message = "GPS PAUSED • OFFLINE"
+        dash.invalidate()
     }
 
-    private fun reset() {
-        maxSpeed = 0f
-        distance = 0f
+    private fun resetTrip() {
+        maxKmh = 0f
+        distanceM = 0f
         movingMs = 0L
-        samples = 0
-        sum = 0.0
-        last = null
-        lastNs = 0L
-        speed = 0f
-        accuracy = 999f
-        speedAccuracy = Float.MAX_VALUE
-        ui.msg = if (running) "GPS ACTIVE • OFFLINE" else "READY • OFFLINE"
-        ui.invalidate()
+        averageSum = 0.0
+        averageSamples = 0
+        lastLocation = null
+        lastElapsedNs = 0L
+        speedKmh = 0f
+        accuracyM = 999f
+        speedAccuracyMps = Float.MAX_VALUE
+        dash.message = if (tracking) "GPS ACTIVE • OFFLINE" else "READY • OFFLINE"
+        dash.invalidate()
     }
 
-    override fun onLocationChanged(l: Location) {
-        accuracy = if (l.hasAccuracy()) l.accuracy else 999f
-        val raw = if (l.hasSpeed()) max(0f, l.speed) else 0f
-        speedAccuracy = if (Build.VERSION.SDK_INT >= 26 && l.hasSpeedAccuracy()) {
-            l.speedAccuracyMetersPerSecond
+    override fun onLocationChanged(location: Location) {
+        accuracyM = if (location.hasAccuracy()) location.accuracy else 999f
+        speedAccuracyMps = if (Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy()) {
+            location.speedAccuracyMetersPerSecond
         } else {
             Float.MAX_VALUE
         }
-        if (accuracy > 35f) {
-            ui.msg = String.format(Locale.US, "GPS WEAK • ±%.0f m", accuracy)
-            ui.invalidate()
+
+        if (accuracyM > 35f) {
+            dash.message = String.format(Locale.US, "GPS WEAK • ±%.0f m", accuracyM)
+            dash.invalidate()
             return
         }
 
-        val ns = l.elapsedRealtimeNanos
-        val old = last
-        val dt = if (old != null && ns > lastNs) (ns - lastNs) / 1e9f else 0f
-        if (old != null && dt > 0f) {
-            val jump = old.distanceTo(l)
-            val derived = jump / dt
-            if (derived > 69.4f && raw < 55f) return
-            if (jump > 120f && dt < 2.5f) return
-            distance += jump
-            if (raw > 0.5f) movingMs += (dt * 1000f).toLong()
+        val nowNs = location.elapsedRealtimeNanos
+        val previous = lastLocation
+        val dt = if (previous != null && nowNs > lastElapsedNs) {
+            (nowNs - lastElapsedNs) / 1_000_000_000f
+        } else 0f
+
+        val rawMps = if (location.hasSpeed()) max(0f, location.speed) else 0f
+
+        if (previous != null && dt > 0f) {
+            val jumpM = previous.distanceTo(location)
+            val derivedMps = jumpM / dt
+            if (jumpM > 120f && dt < 2.5f) return
+            if (derivedMps > 69.4f && rawMps < 55f) return
+            distanceM += jumpM
+            if (rawMps > 0.5f) movingMs += (dt * 1000f).toLong()
         }
 
-        val q = quality()
-        val target = raw * 3.6f
-        val alpha = 0.22f + 0.58f * q
-        speed += (target - speed) * alpha
-        if (abs(speed) < 1f && target < 1.5f) speed = 0f
+        val quality = gpsQualityFactor()
+        val targetKmh = rawMps * 3.6f
+        val alpha = 0.28f + 0.55f * quality
+        speedKmh += (targetKmh - speedKmh) * alpha
+        if (targetKmh < 1.5f && speedKmh < 1f) speedKmh = 0f
 
-        last = Location(l)
-        lastNs = ns
-        maxSpeed = max(maxSpeed, speed)
-        if (q > 0.35f) {
-            samples++
-            sum += speed
+        lastLocation = Location(location)
+        lastElapsedNs = nowNs
+        maxKmh = max(maxKmh, speedKmh)
+        if (quality > 0.35f) {
+            averageSamples++
+            averageSum += speedKmh
         }
-        ui.invalidate()
+        dash.message = "GPS ACTIVE • OFFLINE"
+        dash.invalidate()
     }
 
-    private fun quality(): Float {
-        val p = (1f - (accuracy - 3f) / 27f).coerceIn(0f, 1f)
-        val v = if (speedAccuracy == Float.MAX_VALUE) 0.55f
-        else (1f - speedAccuracy / 5f).coerceIn(0f, 1f)
-        return (p * 0.7f + v * 0.3f).coerceIn(0f, 1f)
+    private fun gpsQualityFactor(): Float {
+        val position = (1f - (accuracyM - 3f) / 27f).coerceIn(0f, 1f)
+        val velocity = if (speedAccuracyMps == Float.MAX_VALUE) 0.55f
+        else (1f - speedAccuracyMps / 5f).coerceIn(0f, 1f)
+        return (position * 0.7f + velocity * 0.3f).coerceIn(0f, 1f)
     }
 
-    private fun avg() = if (samples > 0) (sum / samples).toFloat() else 0f
-
-    private fun gps() = when {
-        accuracy <= 5f -> "EXCELLENT"
-        accuracy <= 10f -> "GOOD"
-        accuracy <= 20f -> "FAIR"
-        accuracy < 900f -> "WEAK"
+    private fun gpsLabel(): String = when {
+        accuracyM <= 5f -> "EXCELLENT"
+        accuracyM <= 10f -> "GOOD"
+        accuracyM <= 20f -> "FAIR"
+        accuracyM < 900f -> "WEAK"
         else -> "SEARCHING"
     }
 
-    private fun time(): String {
-        val t = movingMs / 1000
-        return if (t >= 3600) String.format(Locale.US, "%02d:%02d:%02d", t / 3600, t % 3600 / 60, t % 60)
-        else String.format(Locale.US, "%02d:%02d", t / 60, t % 60)
+    private fun averageKmh(): Float = if (averageSamples == 0) 0f else (averageSum / averageSamples).toFloat()
+
+    private fun movingTime(): String {
+        val seconds = movingMs / 1000L
+        return if (seconds >= 3600L) {
+            String.format(Locale.US, "%02d:%02d:%02d", seconds / 3600L, (seconds % 3600L) / 60L, seconds % 60L)
+        } else {
+            String.format(Locale.US, "%02d:%02d", seconds / 60L, seconds % 60L)
+        }
     }
 
-    private fun pip() {
+    private fun enterPip() {
         if (Build.VERSION.SDK_INT >= 26) {
             val params = PictureInPictureParams.Builder()
                 .setAspectRatio(Rational(9, 16))
@@ -177,171 +215,193 @@ class MainActivityV2 : Activity(), LocationListener {
         }
     }
 
-    override fun onRequestPermissionsResult(r: Int, p: Array<out String>, g: IntArray) {
-        super.onRequestPermissionsResult(r, p, g)
-        if (r == 10 && g.isNotEmpty() && g[0] == PackageManager.PERMISSION_GRANTED) start()
-    }
-
-    override fun onProviderDisabled(p: String) {
-        if (p == LocationManager.GPS_PROVIDER) {
-            ui.msg = "GPS OFF • ENABLE LOCATION"
-            ui.invalidate()
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, results)
+        if (requestCode == REQUEST_LOCATION && results.isNotEmpty() &&
+            results[0] == PackageManager.PERMISSION_GRANTED) {
+            startTracking()
+        } else {
+            dash.message = "PRECISE GPS PERMISSION REQUIRED"
+            dash.invalidate()
         }
     }
 
-    override fun onProviderEnabled(p: String) {
-        if (p == LocationManager.GPS_PROVIDER) {
-            ui.msg = "GPS READY • OFFLINE"
-            ui.invalidate()
+    override fun onProviderDisabled(provider: String) {
+        if (provider == LocationManager.GPS_PROVIDER) {
+            dash.message = "GPS OFF • ENABLE LOCATION"
+            dash.invalidate()
+        }
+    }
+
+    override fun onProviderEnabled(provider: String) {
+        if (provider == LocationManager.GPS_PROVIDER) {
+            dash.message = "GPS READY • OFFLINE"
+            dash.invalidate()
         }
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        lm.removeUpdates(this)
+        locationManager.removeUpdates(this)
         super.onDestroy()
     }
 
-    private inner class Dash(c: Context) : View(c) {
-        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private inner class Dashboard(context: Context) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-        var msg = "READY • OFFLINE"
-        private var a = RectF()
-        private var b = RectF()
-        private var d = RectF()
+        private var startRect = RectF()
+        private var resetRect = RectF()
+        private var pipRect = RectF()
+        var message = "READY • OFFLINE"
 
-        override fun onDraw(c: Canvas) {
-            super.onDraw(c)
-            c.drawColor(BG)
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawColor(BG)
+
             val w = width.toFloat()
             val h = height.toFloat()
-            val l = dp(14).toFloat()
-            val r = w - l
-            val cw = r - l
-            txt(c, "SPEEDOMETER", l, dp(25).toFloat(), 19, TEXT, true, Paint.Align.LEFT)
-            txt(c, if (running) "● GPS ACTIVE" else "○ GPS READY", l, dp(46).toFloat(), 10,
-                if (running) GREEN else MUTED, true, Paint.Align.LEFT)
-            pill(c, r - dp(84), dp(12), dp(84), dp(28), "OFFLINE", CYAN)
-            pill(c, r - dp(170), dp(12), dp(78), dp(28), gps(), GREEN)
+            val left = df(16)
+            val right = w - df(16)
+            val contentW = right - left
 
-            val top = dp(62).toFloat()
-            val gh = min(dp(400).toFloat(), h * 0.49f)
-            val box = RectF(l, top, r, top + gh)
-            card(c, box, PANEL)
+            text(canvas, "SPEEDOMETER", left, df(24), 19f, TEXT, true, Paint.Align.LEFT)
+            text(canvas, if (tracking) "● GPS ACTIVE" else "○ GPS READY", left, df(45), 10f,
+                if (tracking) GREEN else MUTED, true, Paint.Align.LEFT)
+            pill(canvas, right - df(88), df(10), df(88), df(28), "OFFLINE", CYAN)
+            pill(canvas, right - df(174), df(10), df(78), df(28), gpsLabel(), GREEN)
+
+            val panelTop = df(62)
+            val panelHeight = min(df(400), h * 0.49f)
+            val panel = RectF(left, panelTop, right, panelTop + panelHeight)
+            roundCard(canvas, panel)
+
             val cx = w / 2f
-            val cy = box.top + gh * 0.57f
-            val rad = min(cw * 0.39f, gh * 0.43f)
-            val arc = RectF(cx - rad, cy - rad, cx + rad, cy + rad)
-            p.style = Paint.Style.STROKE
-            p.strokeCap = Paint.Cap.ROUND
-            p.strokeWidth = dp(12).toFloat()
-            p.color = TRACK
-            c.drawArc(arc, 140f, 260f, false, p)
-            p.color = gcol()
-            c.drawArc(arc, 140f, 260f * (speed / 180f).coerceIn(0f, 1f), false, p)
-            p.strokeWidth = dp(2).toFloat()
+            val cy = panel.top + panelHeight * 0.57f
+            val radius = min(contentW * 0.39f, panelHeight * 0.43f)
+            val arc = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
+
+            paint.style = Paint.Style.STROKE
+            paint.strokeCap = Paint.Cap.ROUND
+            paint.strokeWidth = df(12)
+            paint.color = TRACK
+            canvas.drawArc(arc, 140f, 260f, false, paint)
+            paint.color = gaugeColor()
+            canvas.drawArc(arc, 140f, 260f * (speedKmh / 180f).coerceIn(0f, 1f), false, paint)
+
+            paint.strokeWidth = df(2)
             for (i in 0..9) {
-                val an = Math.toRadians(140 + i * 260.0 / 9)
-                val rr1 = rad - dp(18)
-                val rr2 = rad - dp(5)
-                p.color = if (i * 20 <= speed) gcol() else GRID
-                c.drawLine(
-                    cx + cos(an).toFloat() * rr1,
-                    cy + sin(an).toFloat() * rr1,
-                    cx + cos(an).toFloat() * rr2,
-                    cy + sin(an).toFloat() * rr2,
-                    p
+                val angle = Math.toRadians(140.0 + i * 260.0 / 9.0)
+                val r1 = radius - df(18)
+                val r2 = radius - df(5)
+                paint.color = if (i * 20f <= speedKmh) gaugeColor() else GRID
+                canvas.drawLine(
+                    cx + cos(angle).toFloat() * r1,
+                    cy + sin(angle).toFloat() * r1,
+                    cx + cos(angle).toFloat() * r2,
+                    cy + sin(angle).toFloat() * r2,
+                    paint
                 )
             }
-            txt(c, "GPS SPEED", cx, cy - dp(52).toFloat(), 12, MUTED, true, Paint.Align.CENTER)
-            txt(c, String.format(Locale.US, "%.1f", speed), cx, cy + dp(20).toFloat(), 64, TEXT, false, Paint.Align.CENTER)
-            txt(c, "km/h", cx, cy + dp(49).toFloat(), 16, MUTED, false, Paint.Align.CENTER)
-            txt(c, if (accuracy < 900) String.format(Locale.US, "GPS ±%.0f m", accuracy) else "WAITING FOR GPS",
-                cx, cy + dp(76).toFloat(), 11, gcol(), true, Paint.Align.CENTER)
 
-            val it = box.bottom + dp(10)
-            val ih = dp(94).toFloat()
-            card(c, RectF(l, it, r, it + ih), PANEL)
-            txt(c, "RIDE DATA", l + dp(14), it + dp(20).toFloat(), 10, MUTED, true, Paint.Align.LEFT)
-            info(c, "AVG", String.format(Locale.US, "%.1f km/h", avg()), l + dp(14), it)
-            info(c, "MAX", String.format(Locale.US, "%.1f km/h", maxSpeed), l + dp(112), it)
-            info(c, "TRIP", String.format(Locale.US, "%.2f km", distance / 1000), l + dp(210), it)
-            info(c, "TIME", time(), r - dp(78), it)
-            txt(c, "ACCURACY", l + dp(14), it + dp(76).toFloat(), 9, MUTED, true, Paint.Align.LEFT)
-            txt(c, if (accuracy < 900) String.format(Locale.US, "±%.0f m", accuracy) else "—",
-                l + dp(14), it + dp(91).toFloat(), 13, TEXT, true, Paint.Align.LEFT)
-            txt(c, "GPS", l + dp(112), it + dp(76).toFloat(), 9, MUTED, true, Paint.Align.LEFT)
-            txt(c, gps(), l + dp(112), it + dp(91).toFloat(), 13, gcol(), true, Paint.Align.LEFT)
-            txt(c, "MODE", l + dp(210), it + dp(76).toFloat(), 9, MUTED, true, Paint.Align.LEFT)
-            txt(c, "SPORT", l + dp(210), it + dp(91).toFloat(), 13, CYAN, true, Paint.Align.LEFT)
+            text(canvas, "GPS SPEED", cx, cy - df(52), 12f, MUTED, true, Paint.Align.CENTER)
+            text(canvas, String.format(Locale.US, "%.1f", speedKmh), cx, cy + df(20), 64f, TEXT, false, Paint.Align.CENTER)
+            text(canvas, "km/h", cx, cy + df(49), 16f, MUTED, false, Paint.Align.CENTER)
+            val accuracyText = if (accuracyM < 900f) {
+                String.format(Locale.US, "GPS ±%.0f m", accuracyM)
+            } else "WAITING FOR GPS"
+            text(canvas, accuracyText, cx, cy + df(76), 11f, gaugeColor(), true, Paint.Align.CENTER)
 
-            val by = h - dp(65).toFloat()
-            a = RectF(l, by, l + cw * 0.46f, by + dp(48))
-            b = RectF(l + cw * 0.48f, by, l + cw * 0.72f, by + dp(48))
-            d = RectF(r - cw * 0.24f, by, r, by + dp(48))
-            action(c, a, if (running) "STOP" else "START", running)
-            action(c, b, "RESET", false)
-            action(c, d, "PIP", false)
-            txt(c, msg, w / 2f, by - dp(8).toFloat(), 10, MUTED, true, Paint.Align.CENTER)
+            val dataTop = panel.bottom + df(10)
+            val dataHeight = df(106)
+            val dataPanel = RectF(left, dataTop, right, dataTop + dataHeight)
+            roundCard(canvas, dataPanel)
+            text(canvas, "RIDE DATA", left + df(14), dataTop + df(20), 10f, MUTED, true, Paint.Align.LEFT)
+            stat(canvas, "AVG", String.format(Locale.US, "%.1f", averageKmh()), "km/h", left + df(14), dataTop + df(28))
+            stat(canvas, "MAX", String.format(Locale.US, "%.1f", maxKmh), "km/h", left + df(106), dataTop + df(28))
+            stat(canvas, "TRIP", String.format(Locale.US, "%.2f", distanceM / 1000f), "km", left + df(198), dataTop + df(28))
+            stat(canvas, "TIME", movingTime(), "", right - df(86), dataTop + df(28))
+
+            text(canvas, "ACCURACY", left + df(14), dataTop + df(82), 9f, MUTED, true, Paint.Align.LEFT)
+            text(canvas, if (accuracyM < 900f) String.format(Locale.US, "±%.0f m", accuracyM) else "—",
+                left + df(14), dataTop + df(98), 12f, TEXT, true, Paint.Align.LEFT)
+            text(canvas, "GPS", left + df(106), dataTop + df(82), 9f, MUTED, true, Paint.Align.LEFT)
+            text(canvas, gpsLabel(), left + df(106), dataTop + df(98), 12f, gaugeColor(), true, Paint.Align.LEFT)
+            text(canvas, "MODE", left + df(198), dataTop + df(82), 9f, MUTED, true, Paint.Align.LEFT)
+            text(canvas, "SPORT", left + df(198), dataTop + df(98), 12f, CYAN, true, Paint.Align.LEFT)
+
+            val buttonY = h - df(58)
+            startRect = RectF(left, buttonY, left + contentW * 0.46f, buttonY + df(46))
+            resetRect = RectF(left + contentW * 0.48f, buttonY, left + contentW * 0.72f, buttonY + df(46))
+            pipRect = RectF(right - contentW * 0.24f, buttonY, right, buttonY + df(46))
+            button(canvas, startRect, if (tracking) "STOP" else "START", tracking)
+            button(canvas, resetRect, "RESET", false)
+            button(canvas, pipRect, "PIP", false)
+            text(canvas, message, cx, buttonY - df(8), 10f, MUTED, true, Paint.Align.CENTER)
         }
 
-        private fun info(c: Canvas, label: String, value: String, x: Float, y: Float) {
-            txt(c, label, x, y + dp(43).toFloat(), 9, MUTED, true, Paint.Align.LEFT)
-            txt(c, value, x, y + dp(61).toFloat(), 13, TEXT, true, Paint.Align.LEFT)
+        private fun stat(canvas: Canvas, label: String, value: String, unit: String, x: Float, y: Float) {
+            text(canvas, label, x, y + df(15), 9f, MUTED, true, Paint.Align.LEFT)
+            text(canvas, value, x, y + df(34), 13f, TEXT, true, Paint.Align.LEFT)
+            if (unit.isNotEmpty()) text(canvas, unit, x, y + df(47), 8f, MUTED, false, Paint.Align.LEFT)
         }
 
-        private fun action(c: Canvas, q: RectF, s: String, on: Boolean) {
-            fill.color = if (on) GREEN else PANEL
-            c.drawRoundRect(q, dp(14).toFloat(), dp(14).toFloat(), fill)
-            p.style = Paint.Style.STROKE
-            p.strokeWidth = dp(1).toFloat()
-            p.color = if (on) GREEN else GRID
-            c.drawRoundRect(q, dp(14).toFloat(), dp(14).toFloat(), p)
-            txt(c, s, q.centerX(), q.centerY() + dp(5).toFloat(), 12, if (on) BG else TEXT, true, Paint.Align.CENTER)
+        private fun button(canvas: Canvas, rect: RectF, label: String, active: Boolean) {
+            fill.color = if (active) GREEN else PANEL
+            canvas.drawRoundRect(rect, df(13), df(13), fill)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = df(1)
+            paint.color = if (active) GREEN else GRID
+            canvas.drawRoundRect(rect, df(13), df(13), paint)
+            text(canvas, label, rect.centerX(), rect.centerY() + df(4), 12f,
+                if (active) BG else TEXT, true, Paint.Align.CENTER)
         }
 
-        private fun pill(c: Canvas, x: Float, y: Float, w: Float, h: Float, s: String, col: Int) {
-            fill.color = if (s == "OFFLINE") PANEL else if (s == "GOOD" || s == "EXCELLENT") GREEN_DARK else PANEL
-            c.drawRoundRect(RectF(x, y, x + w, y + h), h / 2, h / 2, fill)
-            txt(c, s, x + w / 2, y + h * 0.67f, 9, col, true, Paint.Align.CENTER)
+        private fun pill(canvas: Canvas, x: Float, y: Float, width: Float, height: Float, label: String, color: Int) {
+            fill.color = if (label == "OFFLINE") PANEL else if (label == "GOOD" || label == "EXCELLENT") GREEN_DARK else PANEL
+            canvas.drawRoundRect(RectF(x, y, x + width, y + height), height / 2f, height / 2f, fill)
+            text(canvas, label, x + width / 2f, y + height * 0.67f, 8f, color, true, Paint.Align.CENTER)
         }
 
-        private fun card(c: Canvas, q: RectF, col: Int) {
-            fill.color = col
-            c.drawRoundRect(q, dp(20).toFloat(), dp(20).toFloat(), fill)
+        private fun roundCard(canvas: Canvas, rect: RectF) {
+            fill.color = PANEL
+            canvas.drawRoundRect(rect, df(20), df(20), fill)
         }
 
-        private fun gcol() = when {
-            accuracy <= 5f -> GREEN
-            accuracy <= 10f -> CYAN
-            accuracy <= 20f -> AMBER
+        private fun gaugeColor(): Int = when {
+            accuracyM <= 5f -> GREEN
+            accuracyM <= 10f -> CYAN
+            accuracyM <= 20f -> AMBER
             else -> MUTED
         }
 
-        private fun txt(c: Canvas, s: String, x: Float, y: Float, z: Float, col: Int, bold: Boolean, align: Paint.Align) {
-            p.style = Paint.Style.FILL
-            p.textAlign = align
-            p.typeface = if (bold) Typeface.create("sans", Typeface.BOLD) else Typeface.create("sans", Typeface.NORMAL)
-            p.textSize = z * resources.displayMetrics.scaledDensity
-            p.color = col
-            c.drawText(s, x, y, p)
+        private fun text(canvas: Canvas, value: String, x: Float, y: Float, sizeSp: Float,
+                         color: Int, bold: Boolean, align: Paint.Align) {
+            paint.style = Paint.Style.FILL
+            paint.textAlign = align
+            paint.typeface = if (bold) Typeface.create("sans", Typeface.BOLD)
+            else Typeface.create("sans", Typeface.NORMAL)
+            paint.textSize = sizeSp * resources.displayMetrics.scaledDensity
+            paint.color = color
+            canvas.drawText(value, x, y, paint)
         }
 
-        override fun onTouchEvent(e: MotionEvent): Boolean {
-            if (e.action == MotionEvent.ACTION_UP) {
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (event.action == MotionEvent.ACTION_UP) {
                 when {
-                    a.contains(e.x, e.y) -> if (running) stop() else start()
-                    b.contains(e.x, e.y) -> reset()
-                    d.contains(e.x, e.y) -> pip()
+                    startRect.contains(event.x, event.y) -> if (tracking) stopTracking() else startTracking()
+                    resetRect.contains(event.x, event.y) -> resetTrip()
+                    pipRect.contains(event.x, event.y) -> enterPip()
                 }
             }
             return true
         }
     }
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density + 0.5f).toInt()
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
+    private fun df(value: Int): Float = value * resources.displayMetrics.density
 
     companion object {
+        private const val REQUEST_LOCATION = 10
         private const val BG = 0xFF070A0E.toInt()
         private const val PANEL = 0xFF10151B.toInt()
         private const val TRACK = 0xFF28323C.toInt()
