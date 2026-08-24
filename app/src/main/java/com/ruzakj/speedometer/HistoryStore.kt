@@ -10,7 +10,6 @@ import java.util.Locale
 object HistoryStore {
     private const val PREFS = "trip_history"
     private const val KEY = "sessions"
-    private const val MAX_ITEMS = 50
 
     data class Trip(val timestamp: Long, val distanceKm: Float, val maxKmh: Float, val avgKmh: Float, val movingMs: Long)
 
@@ -26,7 +25,7 @@ object HistoryStore {
             put("avg", avgKmh)
             put("moving", movingMs)
         })
-        for (i in 0 until minOf(old.length(), MAX_ITEMS - 1)) arr.put(old.getJSONObject(i))
+        for (i in 0 until old.length()) arr.put(old.getJSONObject(i))
         prefs.edit().putString(KEY, arr.toString()).apply()
     }
 
@@ -39,6 +38,8 @@ object HistoryStore {
             }
         }
     }
+
+    fun totalDistanceKm(context: Context): Double = load(context).sumOf { it.distanceKm.toDouble() }
 
     fun clear(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY).apply()
     fun date(ts: Long) = SimpleDateFormat("dd MMM yyyy • HH:mm", Locale.getDefault()).format(Date(ts))
