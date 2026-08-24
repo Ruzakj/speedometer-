@@ -30,8 +30,12 @@ class SpeedometerApp : Application() {
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
-            override fun onActivityCreated(activity: Activity, state: Bundle?) { if (activity is MainActivityV2) { currentMain = activity; installHistoryButton(activity) } }
-            override fun onActivityResumed(activity: Activity) { if (activity is MainActivityV2) { currentMain = activity; installHistoryButton(activity) } }
+            override fun onActivityCreated(activity: Activity, state: Bundle?) {
+                if (activity is MainActivityV2) { currentMain = activity; installHistoryButton(activity); installInsights(activity) }
+            }
+            override fun onActivityResumed(activity: Activity) {
+                if (activity is MainActivityV2) { currentMain = activity; installHistoryButton(activity); installInsights(activity) }
+            }
             override fun onActivityPaused(activity: Activity) { if (activity is MainActivityV2) saveSnapshot(activity) }
             override fun onActivityDestroyed(activity: Activity) { if (activity === currentMain) currentMain = null }
             override fun onActivityStarted(activity: Activity) {}
@@ -39,6 +43,20 @@ class SpeedometerApp : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
         })
         handler.post(sessionMonitor)
+    }
+
+    private fun installInsights(activity: MainActivityV2) {
+        val decor = activity.window.decorView as? FrameLayout ?: return
+        if (decor.findViewWithTag<View>("ride_insights_overlay") != null) return
+        val overlay = RideInsightsOverlay(
+            activity,
+            { readFloat(activity, "speedKmh") },
+            { readFloat(activity, "accuracyM", 999f) },
+            { readFloat(activity, "speedAccuracyMps", Float.MAX_VALUE) },
+            { activity.getSharedPreferences("ride_settings", MODE_PRIVATE).getFloat("overspeed_limit", 80f) },
+            { value -> activity.getSharedPreferences("ride_settings", MODE_PRIVATE).edit().putFloat("overspeed_limit", value.coerceIn(30f, 110f)).apply() }
+        ).apply { tag = "ride_insights_overlay" }
+        decor.addView(overlay, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun installHistoryButton(activity: Activity) {
@@ -55,7 +73,7 @@ class SpeedometerApp : Application() {
             elevation = dp(activity, 4).toFloat()
             setOnClickListener { activity.startActivity(android.content.Intent(activity, HistoryActivity::class.java)) }
         }
-        decor.addView(button, FrameLayout.LayoutParams(dp(activity, 78), dp(activity, 34), Gravity.TOP or Gravity.END).apply { topMargin = dp(activity, 8); rightMargin = dp(activity, 10) })
+        decor.addView(button, FrameLayout.LayoutParams(dp(activity, 78), dp(activity, 34), Gravity.TOP or Gravity.END).apply { topMargin = dp(activity, 54); rightMargin = dp(activity, 10) })
     }
 
     private fun saveSnapshot(activity: MainActivityV2) {
@@ -78,6 +96,10 @@ class SpeedometerApp : Application() {
     private fun readBoolean(activity: MainActivityV2, field: String): Boolean = runCatching {
         activity.javaClass.getDeclaredField(field).apply { isAccessible = true }.getBoolean(activity)
     }.getOrDefault(false)
+
+    private fun readFloat(activity: MainActivityV2, field: String, fallback: Float = 0f): Float = runCatching {
+        activity.javaClass.getDeclaredField(field).apply { isAccessible = true }.getFloat(activity)
+    }.getOrDefault(fallback)
 
     private fun dp(a: Activity, v: Int) = (v * a.resources.displayMetrics.density).toInt()
 }
