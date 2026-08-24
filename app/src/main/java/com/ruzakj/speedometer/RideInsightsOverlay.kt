@@ -20,18 +20,22 @@ class RideInsightsOverlay(
     private val speed: () -> Float,
     private val accuracy: () -> Float,
     private val speedAccuracy: () -> Float,
-    private val moving: () -> Boolean,
     private val limit: () -> Float,
-    private val setLimit: (Float) -> Unit,
-    private val samples: () -> List<Float>
+    private val setLimit: (Float) -> Unit
 ) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
     private val handler = Handler(Looper.getMainLooper())
+    private val history = ArrayDeque<Float>()
+    private val limits = floatArrayOf(50f, 60f, 70f, 80f, 90f, 100f, 110f)
     private var lastOverspeed = false
     private var flashUntil = 0L
     private var showGraph = false
-    private val limits = floatArrayOf(50f, 60f, 70f, 80f, 90f, 100f, 110f)
+    private var movingState = false
+    private var stoppedSince = 0L
+    private var movingMs = 0L
+    private var lastSampleAt = 0L
+
     private val refresh = object : Runnable {
         override fun run() { invalidate(); handler.postDelayed(this, 250L) }
     }
@@ -55,10 +59,28 @@ class RideInsightsOverlay(
         return false
     }
 
+    private fun sample(now: Long, s: Float) {
+        if (lastSampleAt != 0L) {
+            val dt = now - lastSampleAt
+            if (dt in 1..2_000) {
+                if (s >= 2f) { movingState = true; stoppedSince = 0L }
+                else if (movingState && s <= 1f) {
+                    if (stoppedSince == 0L) stoppedSince = now
+                    if (now - stoppedSince >= 4_000L) movingState = false
+                } else if (s > 1f) stoppedSince = 0L
+                if (movingState) movingMs += dt
+            }
+        }
+        lastSampleAt = now
+        history.addLast(s)
+        while (history.size > 120) history.removeFirst()
+    }
+
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val now = System.currentTimeMillis()
         val s = speed().coerceIn(0f, 110f)
+        sample(now, s)
         val lim = limit().coerceIn(30f, 110f)
         val acc = accuracy()
         val sAcc = speedAccuracy()
@@ -76,15 +98,15 @@ class RideInsightsOverlay(
         val gps = when { acc <= 5f -> "GPS EXCELLENT"; acc <= 10f -> "GPS GOOD"; acc <= 20f -> "GPS FAIR"; acc < 900f -> "GPS WEAK"; else -> "GPS SEARCHING" }
         val speedAccText = if (sAcc.isFinite()) String.format(Locale.US, "±%.1f m/s", sAcc) else "speed ±—"
         text(c, "$gps  •  ±${if (acc < 900f) String.format(Locale.US, "%.0f", acc) else "—"} m  •  $speedAccText", left, top + dp(15), 9f, if (acc <= 10f) 0xFF56F0D0.toInt() else 0xFFFFB84D.toInt(), Paint.Align.LEFT, true)
-        text(c, if (moving()) "MOVING" else "SMART STOP", left, top + dp(32), 8f, if (moving()) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
-        text(c, "tap graph area for LIVE SPEED GRAPH", left, top + dp(46), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
+        text(c, if (movingState) "MOVING" else "SMART STOP  •  ${formatMoving(movingMs)}", left, top + dp(32), 8f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
+        text(c, "tap graph area  •  LIMIT tap cycles 50–110", left, top + dp(46), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
         if (showGraph) drawGraph(c, dp(12).toFloat(), dp(60).toFloat(), width * .72f, dp(92).toFloat())
         if (over) text(c, String.format(Locale.US, "OVERSPEED  %.1f km/h", s), width / 2f, height - dp(18), 12f, 0xFFFF4966.toInt(), Paint.Align.CENTER, true)
     }
 
     private fun drawGraph(c: Canvas, x: Float, y: Float, w: Float, h: Float) {
         paint.style = Paint.Style.FILL; paint.color = 0xB8141A24.toInt(); c.drawRoundRect(RectF(x, y, x + w, y + h), dp(14).toFloat(), dp(14).toFloat(), paint)
-        val data = samples()
+        val data = history.toList()
         if (data.size < 2) { text(c, "SPEED GRAPH  •  collecting…", x + dp(12), y + dp(22), 9f, 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true); return }
         val maxV = max(20f, data.maxOrNull() ?: 20f); path.reset()
         data.forEachIndexed { i, v ->
@@ -94,6 +116,11 @@ class RideInsightsOverlay(
         }
         paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(2).toFloat(); paint.color = 0xFF31D8FF.toInt(); c.drawPath(path, paint)
         text(c, String.format(Locale.US, "LIVE SPEED  max %.1f", data.maxOrNull() ?: 0f), x + dp(12), y + dp(18), 8f, 0xFFDAE5F2.toInt(), Paint.Align.LEFT, true)
+    }
+
+    private fun formatMoving(ms: Long): String {
+        val s = ms / 1000L
+        return String.format(Locale.US, "%02d:%02d", s / 60, s % 60)
     }
 
     @Suppress("DEPRECATION")
