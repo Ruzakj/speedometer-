@@ -19,10 +19,7 @@ import android.view.WindowManager
 import java.util.Locale
 import kotlin.math.max
 
-/**
- * Secondary telemetry layer. It deliberately disappears while the activity is
- * in PiP so it can never cover the PiP dashboard or system PiP controls.
- */
+/** Secondary telemetry layer. Never paints over the PiP dashboard. */
 class RideInsightsOverlay(
     context: Context,
     private val speed: () -> Float,
@@ -46,7 +43,12 @@ class RideInsightsOverlay(
 
     private val refresh = object : Runnable {
         override fun run() {
-            if (!isInPip()) invalidate()
+            if (isInPip()) {
+                invalidate()
+            } else {
+                hideSystemBars()
+                invalidate()
+            }
             handler.postDelayed(this, 250L)
         }
     }
@@ -63,11 +65,8 @@ class RideInsightsOverlay(
     }
 
     private fun activity(): Activity? = context as? Activity
+    private fun isInPip(): Boolean = Build.VERSION.SDK_INT >= 24 && activity()?.isInPictureInPictureMode == true
 
-    private fun isInPip(): Boolean =
-        Build.VERSION.SDK_INT >= 24 && activity()?.isInPictureInPictureMode == true
-
-    /** Fullscreen dashboard: remove both status and navigation bars. */
     private fun hideSystemBars() {
         val a = activity() ?: return
         if (isInPip()) return
@@ -75,35 +74,33 @@ class RideInsightsOverlay(
             a.window.setDecorFitsSystemWindows(false)
             a.window.insetsController?.let { controller ->
                 controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                controller.systemBarsBehavior =
-                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         } else {
             @Suppress("DEPRECATION")
-            a.window.decorView.systemUiVisibility = (
+            a.window.decorView.systemUiVisibility =
                 View.SYSTEM_UI_FLAG_FULLSCREEN or
                     View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
                     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
                     View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                     View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
                     View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                )
         }
         a.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     fun smartMovingMs(): Long = movingMs
 
-    private fun isGraphTouch(e: MotionEvent) =
-        e.y in dp(54).toFloat()..dp(154).toFloat() && e.x < width * .72f
+    // Keep the controls in the empty lower area of the dashboard instead of covering the title/gauge.
+    private fun chipRect(): RectF {
+        val bottom = height.toFloat() - dp(62)
+        return RectF(width - dp(112).toFloat(), bottom - dp(34).toFloat(), width - dp(12).toFloat(), bottom)
+    }
 
-    private fun isChipTouch(e: MotionEvent) =
-        RectF(
-            (width - dp(112)).toFloat(),
-            dp(8).toFloat(),
-            (width - dp(12)).toFloat(),
-            dp(48).toFloat()
-        ).contains(e.x, e.y)
+    private fun isGraphTouch(e: MotionEvent): Boolean =
+        showGraph && e.x < width * .72f && e.y > height - dp(250)
+
+    private fun isChipTouch(e: MotionEvent): Boolean = chipRect().contains(e.x, e.y)
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (isInPip()) return false
@@ -118,7 +115,7 @@ class RideInsightsOverlay(
                 return true
             }
             if (isGraphTouch(event)) {
-                showGraph = !showGraph
+                showGraph = false
                 invalidate()
                 performClick()
                 return true
@@ -150,7 +147,6 @@ class RideInsightsOverlay(
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
-        // PiP is rendered exclusively by Dashboard. Never paint telemetry over it.
         if (isInPip()) return
 
         val now = System.currentTimeMillis()
@@ -166,12 +162,10 @@ class RideInsightsOverlay(
         }
         lastOverspeed = over
 
+        // Compact telemetry strip at the very bottom. Nothing is drawn over the title, gauge or stat cards.
+        val bottom = height.toFloat() - dp(62)
         val left = dp(12).toFloat()
-        val top = dp(8).toFloat()
-        val chip = RectF(
-            (width - dp(112)).toFloat(), top,
-            (width - dp(12)).toFloat(), dp(48).toFloat()
-        )
+        val chip = chipRect()
         paint.style = Paint.Style.FILL
         paint.color = if (over || now < flashUntil) 0xD9FF355E.toInt() else 0xC91A202B.toInt()
         c.drawRoundRect(chip, dp(18).toFloat(), dp(18).toFloat(), paint)
@@ -185,16 +179,16 @@ class RideInsightsOverlay(
             else -> "GPS SEARCHING"
         }
         val speedAccText = if (sAcc.isFinite()) String.format(Locale.US, "±%.1f m/s", sAcc) else "speed ±—"
-        text(c, "$gps  •  ±${if (acc < 900f) String.format(Locale.US, "%.0f", acc) else "—"} m  •  $speedAccText", left, top + dp(15), 9f, if (acc <= 10f) 0xFF56F0D0.toInt() else 0xFFFFB84D.toInt(), Paint.Align.LEFT, true)
-        text(c, if (movingState) "MOVING" else "SMART STOP  •  ${formatMoving(movingMs)}", left, top + dp(32), 8f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
-        text(c, "tap graph area  •  LIMIT tap cycles 50–110", left, top + dp(46), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
-        if (showGraph) drawGraph(c, dp(12).toFloat(), dp(60).toFloat(), width * .72f, dp(92).toFloat())
-        if (over) text(c, String.format(Locale.US, "OVERSPEED  %.1f km/h", s), width / 2f, (height - dp(18)).toFloat(), 12f, 0xFFFF4966.toInt(), Paint.Align.CENTER, true)
+        text(c, "$gps  •  ±${if (acc < 900f) String.format(Locale.US, "%.0f", acc) else "—"} m  •  $speedAccText", left, bottom - dp(40), 8f, if (acc <= 10f) 0xFF56F0D0.toInt() else 0xFFFFB84D.toInt(), Paint.Align.LEFT, true)
+        text(c, if (movingState) "MOVING" else "SMART STOP  •  ${formatMoving(movingMs)}", left, bottom - dp(24), 8f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
+
+        if (showGraph) drawGraph(c, dp(12).toFloat(), height - dp(245).toFloat(), width * .72f, dp(150).toFloat())
+        if (over) text(c, String.format(Locale.US, "OVERSPEED  %.1f km/h", s), width / 2f, height - dp(110).toFloat(), 12f, 0xFFFF4966.toInt(), Paint.Align.CENTER, true)
     }
 
     private fun drawGraph(c: Canvas, x: Float, y: Float, w: Float, h: Float) {
         paint.style = Paint.Style.FILL
-        paint.color = 0xB8141A24.toInt()
+        paint.color = 0xEE141A24.toInt()
         c.drawRoundRect(RectF(x, y, x + w, y + h), dp(14).toFloat(), dp(14).toFloat(), paint)
         val data = history.toList()
         if (data.size < 2) {
