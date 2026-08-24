@@ -52,7 +52,7 @@ class MainActivityV2 : Activity(), LocationListener {
         if(Build.VERSION.SDK_INT>=29){window.isStatusBarContrastEnforced=false;window.isNavigationBarContrastEnforced=false}
         locationManager=getSystemService(Context.LOCATION_SERVICE) as LocationManager;dash=Dashboard(this)
         overspeedLimitKmh=getSharedPreferences("ride_settings",Context.MODE_PRIVATE).getFloat("overspeed_limit",80f).coerceIn(30f,110f)
-        val insights=RideInsightsOverlay(this,{speedKmh},{accuracyM},{speedAccuracyMps},{movingTime()},{smartMoving},{overspeedLimitKmh},{setOverspeedLimit(it)},{speedHistory.toList()})
+        val insights=RideInsightsOverlay(this,{speedKmh},{accuracyM},{speedAccuracyMps},{overspeedLimitKmh},{setOverspeedLimit(it)})
         val root=android.widget.FrameLayout(this);root.addView(dash,android.widget.FrameLayout.LayoutParams(-1,-1));root.addView(insights,android.widget.FrameLayout.LayoutParams(-1,-1))
         dash.setOnApplyWindowInsetsListener{view,insets->if(Build.VERSION.SDK_INT>=30){val b=insets.getInsets(WindowInsets.Type.systemBars());view.setPadding(dp(16),b.top+dp(6),dp(16),b.bottom+dp(8))}else view.setPadding(dp(16),dp(24),dp(16),dp(16));insets}
         setContentView(root);handler.post(refresh);handler.postDelayed(burnInShift,75000L);playStartupSweep()
