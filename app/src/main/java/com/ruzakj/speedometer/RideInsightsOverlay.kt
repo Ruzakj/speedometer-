@@ -46,7 +46,7 @@ class RideInsightsOverlay(
     fun smartMovingMs(): Long = movingMs
 
     private fun isGraphTouch(e: MotionEvent) = e.y in dp(54).toFloat()..dp(154).toFloat() && e.x < width * .72f
-    private fun isChipTouch(e: MotionEvent) = RectF(width - dp(112), dp(8), width - dp(12), dp(48)).contains(e.x, e.y)
+    private fun isChipTouch(e: MotionEvent) = RectF((width - dp(112)).toFloat(), dp(8).toFloat(), (width - dp(12)).toFloat(), dp(48).toFloat()).contains(e.x, e.y)
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action == MotionEvent.ACTION_DOWN) return isChipTouch(event) || isGraphTouch(event)
@@ -91,7 +91,7 @@ class RideInsightsOverlay(
         lastOverspeed = over
 
         val left = dp(12).toFloat(); val top = dp(8).toFloat()
-        val chip = RectF(width - dp(112).toFloat(), top, width - dp(12).toFloat(), dp(48).toFloat())
+        val chip = RectF((width - dp(112)).toFloat(), top, (width - dp(12)).toFloat(), dp(48).toFloat())
         paint.style = Paint.Style.FILL
         paint.color = if (over || now < flashUntil) 0xD9FF355E.toInt() else 0xC91A202B.toInt()
         c.drawRoundRect(chip, dp(18).toFloat(), dp(18).toFloat(), paint)
@@ -103,7 +103,7 @@ class RideInsightsOverlay(
         text(c, if (movingState) "MOVING" else "SMART STOP  •  ${formatMoving(movingMs)}", left, top + dp(32), 8f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
         text(c, "tap graph area  •  LIMIT tap cycles 50–110", left, top + dp(46), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
         if (showGraph) drawGraph(c, dp(12).toFloat(), dp(60).toFloat(), width * .72f, dp(92).toFloat())
-        if (over) text(c, String.format(Locale.US, "OVERSPEED  %.1f km/h", s), width / 2f, height - dp(18), 12f, 0xFFFF4966.toInt(), Paint.Align.CENTER, true)
+        if (over) text(c, String.format(Locale.US, "OVERSPEED  %.1f km/h", s), width / 2f, (height - dp(18)).toFloat(), 12f, 0xFFFF4966.toInt(), Paint.Align.CENTER, true)
     }
 
     private fun drawGraph(c: Canvas, x: Float, y: Float, w: Float, h: Float) {
