@@ -13,6 +13,7 @@ import android.widget.TextView
 class SpeedometerApp : Application() {
     private var lastSavedKey = ""
     private var wasTracking = false
+    private var insights: RideInsightsOverlay? = null
     private val handler = Handler(Looper.getMainLooper())
     private val sessionMonitor = object : Runnable {
         override fun run() {
@@ -37,7 +38,7 @@ class SpeedometerApp : Application() {
                 if (activity is MainActivityV2) { currentMain = activity; installHistoryButton(activity); installInsights(activity) }
             }
             override fun onActivityPaused(activity: Activity) { if (activity is MainActivityV2) saveSnapshot(activity) }
-            override fun onActivityDestroyed(activity: Activity) { if (activity === currentMain) currentMain = null }
+            override fun onActivityDestroyed(activity: Activity) { if (activity === currentMain) { currentMain = null; insights = null } }
             override fun onActivityStarted(activity: Activity) {}
             override fun onActivityStopped(activity: Activity) {}
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
@@ -48,7 +49,7 @@ class SpeedometerApp : Application() {
     private fun installInsights(activity: MainActivityV2) {
         val decor = activity.window.decorView as? FrameLayout ?: return
         if (decor.findViewWithTag<View>("ride_insights_overlay") != null) return
-        val overlay = RideInsightsOverlay(
+        insights = RideInsightsOverlay(
             activity,
             { readFloat(activity, "speedKmh") },
             { readFloat(activity, "accuracyM", 999f) },
@@ -56,7 +57,7 @@ class SpeedometerApp : Application() {
             { activity.getSharedPreferences("ride_settings", MODE_PRIVATE).getFloat("overspeed_limit", 80f) },
             { value -> activity.getSharedPreferences("ride_settings", MODE_PRIVATE).edit().putFloat("overspeed_limit", value.coerceIn(30f, 110f)).apply() }
         ).apply { tag = "ride_insights_overlay" }
-        decor.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        decor.addView(insights, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun installHistoryButton(activity: Activity) {
@@ -84,7 +85,7 @@ class SpeedometerApp : Application() {
             val max = c.getDeclaredField("maxKmh").apply { isAccessible = true }.getFloat(activity)
             val sum = c.getDeclaredField("averageSum").apply { isAccessible = true }.getDouble(activity)
             val samples = c.getDeclaredField("averageSamples").apply { isAccessible = true }.getInt(activity)
-            val moving = c.getDeclaredField("movingMs").apply { isAccessible = true }.getLong(activity)
+            val moving = insights?.smartMovingMs() ?: c.getDeclaredField("movingMs").apply { isAccessible = true }.getLong(activity)
             val avg = if (samples > 0) (sum / samples).toFloat() else 0f
             val key = "%.3f|%.2f|%.2f|%d".format(java.util.Locale.US, distance, max, avg, moving)
             if (key == lastSavedKey) return
