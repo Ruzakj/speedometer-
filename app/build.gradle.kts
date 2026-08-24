@@ -31,8 +31,8 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 
-// Inject the background renderer into the existing native Canvas dashboard at build time.
-// This keeps the 2.8 MB image out of source code while preserving the current UI architecture.
+// Inject the motorcycle artwork renderer into the existing native Canvas dashboard at build time.
+// The image stays as a normal repository asset and is loaded once, not decoded on every frame.
 val applyDashboardBackground by tasks.registering {
     doLast {
         val source = file("src/main/java/com/ruzakj/speedometer/MainActivityV2.kt")
@@ -52,7 +52,7 @@ val applyDashboardBackground by tasks.registering {
             )
             text = text.replace(
                 "private fun shownSpeed()=",
-                "private fun drawBackground(c:Canvas){\\n            c.drawColor(BG)\\n            val bmp=backgroundBitmap ?: return\\n            val bw=bmp.width.toFloat(); val bh=bmp.height.toFloat(); val vw=width.toFloat(); val vh=height.toFloat()\\n            if(bw<=0f || bh<=0f || vw<=0f || vh<=0f) return\\n            // Center-crop with one uniform scale: no stretching, no distortion.\\n            val scale=max(vw/bw, vh/bh); val dw=bw*scale; val dh=bh*scale\\n            val left=(vw-dw)/2f; val top=(vh-dh)/2f\\n            val dst=RectF(left, top, left+dw, top+dh)\\n            paint.alpha=68\\n            paint.shader=null\\n            c.drawBitmap(bmp, null, dst, paint)\\n            // Dark veil keeps text/gauge readable while retaining the motorcycle artwork.\\n            fill.style=Paint.Style.FILL; fill.color=BG; fill.alpha=118\\n            c.drawRect(0f,0f,vw,vh,fill)\\n            paint.alpha=255\\n        }\\n        private fun shownSpeed()="
+                "private fun drawBackground(c:Canvas){\\n            c.drawColor(BG)\\n            val bmp=backgroundBitmap ?: return\\n            val bw=bmp.width.toFloat(); val bh=bmp.height.toFloat(); val vw=width.toFloat(); val vh=height.toFloat()\\n            if(bw<=0f || bh<=0f || vw<=0f || vh<=0f) return\\n            // Uniform center-crop: preserve the original aspect ratio with zero distortion.\\n            val scale=max(vw/bw, vh/bh); val dw=bw*scale; val dh=bh*scale\\n            val left=(vw-dw)/2f; val top=(vh-dh)/2f\\n            val dst=RectF(left, top, left+dw, top+dh)\\n            paint.alpha=105\\n            paint.shader=null\\n            c.drawBitmap(bmp, null, dst, paint)\\n            // Light dark veil keeps dashboard text/gauge readable without hiding the artwork.\\n            fill.style=Paint.Style.FILL; fill.color=BG; fill.alpha=75\\n            c.drawRect(0f,0f,vw,vh,fill)\\n            paint.alpha=255\\n        }\\n        private fun shownSpeed()="
             )
             text = text.replace("\\n", "\n")
             source.writeText(text)
