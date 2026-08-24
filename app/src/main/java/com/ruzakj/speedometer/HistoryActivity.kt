@@ -25,14 +25,17 @@ class HistoryActivity : Activity() {
         header.addView(TextView(this).apply { text = "RIDE HISTORY"; textSize = 22f; setTextColor(text); setTypeface(typeface, 1) }, LinearLayout.LayoutParams(0, dp(48), 1f))
         header.addView(TextView(this).apply { text = "CLEAR"; textSize = 11f; setTextColor(purple); gravity = Gravity.CENTER; setPadding(dp(14), 0, dp(14), 0); setOnClickListener { HistoryStore.clear(this@HistoryActivity); render(root) } }, LinearLayout.LayoutParams(dp(72), dp(40)))
         root.addView(header)
-        root.addView(TextView(this).apply { text = "Stored locally • offline • last 50 rides"; textSize = 11f; setTextColor(muted); setPadding(0, 0, 0, dp(14)) })
+        root.addView(TextView(this).apply { text = "Stored locally • offline • unlimited rides"; textSize = 11f; setTextColor(muted); setPadding(0, 0, 0, dp(8)) })
+        root.addView(TextView(this).apply { tag = "total_distance"; textSize = 18f; setTextColor(cyan); setTypeface(typeface, 1); setPadding(0, 0, 0, dp(14)) })
         setContentView(root)
         render(root)
     }
 
     private fun render(root: LinearLayout) {
-        while (root.childCount > 2) root.removeViewAt(2)
+        while (root.childCount > 3) root.removeViewAt(3)
         val trips = HistoryStore.load(this)
+        val total = HistoryStore.totalDistanceKm(this)
+        root.findViewWithTag<TextView>("total_distance")?.text = String.format(Locale.US, "TOTAL DISTANCE  %.2f km", total)
         if (trips.isEmpty()) {
             root.addView(TextView(this).apply { text = "NO RIDES YET\n\nStart GPS tracking and finish a trip to see it here."; textSize = 15f; setTextColor(muted); gravity = Gravity.CENTER; setPadding(dp(20), dp(70), dp(20), dp(70)) })
             return
