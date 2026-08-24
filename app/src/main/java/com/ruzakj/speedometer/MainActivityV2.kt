@@ -36,12 +36,13 @@ import kotlin.math.sin
 import kotlin.math.roundToInt
 
 class MainActivityV2 : Activity(), LocationListener {
+    // RIDE_INSIGHTS_V1
     private lateinit var dash: Dashboard
     private lateinit var locationManager: LocationManager
     private val handler = Handler(Looper.getMainLooper())
     private var tracking=false; private var lastLocation:Location?=null; private var lastElapsedNs=0L
     private var speedKmh=0f; private var maxKmh=0f; private var distanceM=0f; private var movingMs=0L
-    private var averageSum=0.0; private var averageSamples=0; private var accuracyM=999f; private var speedAccuracyMps=Float.MAX_VALUE
+    private var averageSum=0.0; private var averageSamples=0; private var accuracyM=999f; private var speedAccuracyMps=Float.MAX_VALUE; private var smartMoving=false; private var stoppedSinceNs=0L; private var overspeedLimitKmh=80f; private val speedHistory=ArrayDeque<Float>()
     private var introAnimating=false; private var introSpeed=0f; private var introAnimator:ValueAnimator?=null
     private var burnShiftX=0f; private var burnShiftY=0f; private var burnIndex=0
     private val burnInShift=object:Runnable{override fun run(){if(!isFinishing&&!isInPictureInPictureMode){val d=dfForBurnIn();val pattern=arrayOf(floatArrayOf(1f,0f),floatArrayOf(0f,1f),floatArrayOf(-1f,0f),floatArrayOf(0f,-1f),floatArrayOf(1f,1f),floatArrayOf(-1f,1f),floatArrayOf(-1f,-1f),floatArrayOf(1f,-1f));val p=pattern[burnIndex%pattern.size];burnShiftX=p[0]*d;burnShiftY=p[1]*d;burnIndex++;dash.invalidate()};handler.postDelayed(this,75000L)}}
@@ -50,8 +51,11 @@ class MainActivityV2 : Activity(), LocationListener {
     override fun onCreate(state:Bundle?){super.onCreate(state);window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);window.statusBarColor=BG;window.navigationBarColor=BG
         if(Build.VERSION.SDK_INT>=29){window.isStatusBarContrastEnforced=false;window.isNavigationBarContrastEnforced=false}
         locationManager=getSystemService(Context.LOCATION_SERVICE) as LocationManager;dash=Dashboard(this)
+        overspeedLimitKmh=getSharedPreferences("ride_settings",Context.MODE_PRIVATE).getFloat("overspeed_limit",80f).coerceIn(30f,110f)
+        val insights=RideInsightsOverlay(this,{speedKmh},{accuracyM},{speedAccuracyMps},{movingTime()},{smartMoving},{overspeedLimitKmh},{setOverspeedLimit(it)},{speedHistory.toList()})
+        val root=android.widget.FrameLayout(this);root.addView(dash,android.widget.FrameLayout.LayoutParams(-1,-1));root.addView(insights,android.widget.FrameLayout.LayoutParams(-1,-1))
         dash.setOnApplyWindowInsetsListener{view,insets->if(Build.VERSION.SDK_INT>=30){val b=insets.getInsets(WindowInsets.Type.systemBars());view.setPadding(dp(16),b.top+dp(6),dp(16),b.bottom+dp(8))}else view.setPadding(dp(16),dp(24),dp(16),dp(16));insets}
-        setContentView(dash);handler.post(refresh);handler.postDelayed(burnInShift,75000L);playStartupSweep()
+        setContentView(root);handler.post(refresh);handler.postDelayed(burnInShift,75000L);playStartupSweep()
     }
     private fun dfForBurnIn()=min(2.5f*resources.displayMetrics.density,3f)
     override fun onConfigurationChanged(newConfig:Configuration){super.onConfigurationChanged(newConfig);dash.animateOrientationTransition()}
@@ -59,13 +63,53 @@ class MainActivityV2 : Activity(), LocationListener {
     private fun easeOutCubic(v:Float):Float{val p=v.coerceIn(0f,1f);return 1f-(1f-p)*(1f-p)*(1f-p)}
     private fun easeInOutCubic(v:Float):Float{val p=v.coerceIn(0f,1f);return if(p<.5f)4f*p*p*p else 1f-((-2f*p+2f)*(-2f*p+2f)*(-2f*p+2f))/2f}
     private fun startTracking(){if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),REQUEST_LOCATION);return};if(!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)){dash.message="GPS OFF  •  ENABLE LOCATION";dash.invalidate();return};tracking=true;dash.message="GPS ACTIVE  •  OFFLINE";try{locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER,500L,0f,this,Looper.getMainLooper())}catch(_:SecurityException){tracking=false;dash.message="LOCATION PERMISSION REQUIRED"};dash.invalidate()}
-    private fun stopTracking(){tracking=false;locationManager.removeUpdates(this);dash.message="GPS PAUSED  •  OFFLINE";dash.invalidate()}
-    private fun resetTrip(){maxKmh=0f;distanceM=0f;movingMs=0L;averageSum=0.0;averageSamples=0;lastLocation=null;lastElapsedNs=0L;speedKmh=0f;accuracyM=999f;speedAccuracyMps=Float.MAX_VALUE;dash.message=if(tracking)"GPS ACTIVE  •  OFFLINE" else "READY  •  OFFLINE";dash.invalidate()}
-    override fun onLocationChanged(location:Location){accuracyM=if(location.hasAccuracy())location.accuracy else 999f;speedAccuracyMps=if(Build.VERSION.SDK_INT>=26&&location.hasSpeedAccuracy())location.speedAccuracyMetersPerSecond else Float.MAX_VALUE;if(accuracyM>35f){dash.message=String.format(Locale.US,"GPS WEAK  •  ±%.0f m",accuracyM);dash.invalidate();return};val now=location.elapsedRealtimeNanos;val prev=lastLocation;val dt=if(prev!=null&&now>lastElapsedNs)(now-lastElapsedNs)/1_000_000_000f else 0f;val raw=if(location.hasSpeed())max(0f,location.speed)else 0f;if(prev!=null&&dt>0f){val jump=prev.distanceTo(location);val derived=jump/dt;if(jump>120f&&dt<2.5f)return;if(derived>69.4f&&raw<55f)return;distanceM+=jump;if(raw>.5f)movingMs+=(dt*1000f).toLong()};val q=gpsQualityFactor();val target=(raw*3.6f).coerceIn(0f,MAX_SPEED);val alpha=.30f+.50f*q;speedKmh+=(target-speedKmh)*alpha;speedKmh=speedKmh.coerceIn(0f,MAX_SPEED);if(target<1.5f&&speedKmh<1f)speedKmh=0f;lastLocation=Location(location);lastElapsedNs=now;maxKmh=max(maxKmh,speedKmh).coerceAtMost(MAX_SPEED);if(q>.35f){averageSamples++;averageSum+=speedKmh.toDouble()};dash.message="GPS ACTIVE  •  OFFLINE";dash.invalidate()}
+    private fun stopTracking(){
+        if(tracking)HistoryStore.save(this,distanceM/1000f,maxKmh,averageKmh(),movingMs)
+        tracking=false;locationManager.removeUpdates(this);smartMoving=false;stoppedSinceNs=0L;dash.message="GPS PAUSED  •  OFFLINE";dash.invalidate()
+    }
+    private fun resetTrip(){maxKmh=0f;distanceM=0f;movingMs=0L;averageSum=0.0;averageSamples=0;lastLocation=null;lastElapsedNs=0L;speedKmh=0f;accuracyM=999f;speedAccuracyMps=Float.MAX_VALUE;smartMoving=false;stoppedSinceNs=0L;speedHistory.clear();dash.message=if(tracking)"GPS ACTIVE  •  OFFLINE" else "READY  •  OFFLINE";dash.invalidate()}
+    override fun onLocationChanged(location:Location){
+        accuracyM=if(location.hasAccuracy())location.accuracy else 999f
+        speedAccuracyMps=if(Build.VERSION.SDK_INT>=26&&location.hasSpeedAccuracy())location.speedAccuracyMetersPerSecond else Float.MAX_VALUE
+        if(accuracyM>35f){dash.message=String.format(Locale.US,"GPS WEAK  •  ±%.0f m",accuracyM);dash.invalidate();return}
+        val now=location.elapsedRealtimeNanos
+        val prev=lastLocation
+        val dt=if(prev!=null&&now>lastElapsedNs)(now-lastElapsedNs)/1_000_000_000f else 0f
+        val raw=if(location.hasSpeed())max(0f,location.speed)else 0f
+        val q=gpsQualityFactor()
+        if(prev!=null&&dt>0f){
+            val jump=prev.distanceTo(location)
+            val derived=jump/dt
+            if(jump>120f&&dt<2.5f)return
+            if(derived>69.4f&&raw<55f)return
+            // Ignore GPS drift while stationary; retain real movement without imposing a trip-distance cap.
+            if(jump>=1.5f&&derived>=1.2f&&derived<=55f)distanceM+=jump
+        }
+        val target=(raw*3.6f).coerceIn(0f,MAX_SPEED)
+        val alpha=.30f+.50f*q
+        speedKmh+=(target-speedKmh)*alpha
+        speedKmh=speedKmh.coerceIn(0f,MAX_SPEED)
+        if(target<1.5f&&speedKmh<1f)speedKmh=0f
+
+        // Smart stop: enter moving above 2 km/h, leave moving only after 4 s below 1 km/h.
+        if(speedKmh>=2f){smartMoving=true;stoppedSinceNs=0L}
+        else if(smartMoving&&speedKmh<=1f){if(stoppedSinceNs==0L)stoppedSinceNs=now;if(now-stoppedSinceNs>=4_000_000_000L)smartMoving=false}
+        else if(speedKmh>1f){stoppedSinceNs=0L}
+        if(prev!=null&&dt>0f&&smartMoving)movingMs+=(dt*1000f).toLong()
+        if(smartMoving&&q>.35f){averageSamples++;averageSum+=speedKmh.toDouble()}
+
+        speedHistory.addLast(speedKmh)
+        while(speedHistory.size>120)speedHistory.removeFirst()
+        lastLocation=Location(location);lastElapsedNs=now
+        maxKmh=max(maxKmh,speedKmh).coerceAtMost(MAX_SPEED)
+        if(speedKmh>=overspeedLimitKmh&&speedKmh>=3f)dash.message=String.format(Locale.US,"OVERSPEED  •  %.1f / %.0f km/h",speedKmh,overspeedLimitKmh) else dash.message="GPS ACTIVE  •  OFFLINE"
+        dash.invalidate()
+    }
     private fun gpsQualityFactor():Float{val p=(1f-(accuracyM-3f)/27f).coerceIn(0f,1f);val v=if(speedAccuracyMps==Float.MAX_VALUE).55f else(1f-speedAccuracyMps/5f).coerceIn(0f,1f);return(p*.7f+v*.3f).coerceIn(0f,1f)}
     private fun gpsLabel()=when{accuracyM<=5f->"EXCELLENT";accuracyM<=10f->"GOOD";accuracyM<=20f->"FAIR";accuracyM<900f->"WEAK";else->"SEARCHING"}
     private fun averageKmh()=if(averageSamples==0)0f else(averageSum/averageSamples).toFloat().coerceAtMost(MAX_SPEED)
     private fun movingTime():String{val s=movingMs/1000L;return if(s>=3600)String.format(Locale.US,"%02d:%02d:%02d",s/3600,(s%3600)/60,s%60)else String.format(Locale.US,"%02d:%02d",s/60,s%60)}
+    private fun setOverspeedLimit(value:Float){overspeedLimitKmh=value.coerceIn(30f,110f);getSharedPreferences("ride_settings",Context.MODE_PRIVATE).edit().putFloat("overspeed_limit",overspeedLimitKmh).apply();dash.invalidate()}
     private fun enterPip(){if(Build.VERSION.SDK_INT<26||isInPictureInPictureMode)return;val landscape=resources.configuration.orientation==Configuration.ORIENTATION_LANDSCAPE;val ratio=if(landscape)Rational(16,9)else Rational(9,16);val p=PictureInPictureParams.Builder().setAspectRatio(ratio).apply{if(Build.VERSION.SDK_INT>=31)setSeamlessResizeEnabled(true)}.build();try{enterPictureInPictureMode(p)}catch(_:IllegalStateException){dash.message="PIP UNAVAILABLE";dash.invalidate()}}
     override fun onPictureInPictureModeChanged(v:Boolean){super.onPictureInPictureModeChanged(v);dash.setPipMode(v);dash.invalidate()}
     override fun onRequestPermissionsResult(c:Int,p:Array<out String>,r:IntArray){super.onRequestPermissionsResult(c,p,r);if(c==REQUEST_LOCATION&&r.isNotEmpty()&&r[0]==PackageManager.PERMISSION_GRANTED)startTracking()else if(c==REQUEST_LOCATION){dash.message="PRECISE GPS PERMISSION REQUIRED";dash.invalidate()}}
