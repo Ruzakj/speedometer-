@@ -51,7 +51,6 @@ class RideInsightsOverlay(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_UP) return true
-        // Top-right telemetry chip cycles the configurable overspeed limit.
         val chip = RectF(width - dp(112), dp(8), width - dp(12), dp(48))
         if (chip.contains(event.x, event.y)) {
             val current = limit()
@@ -60,7 +59,6 @@ class RideInsightsOverlay(
             invalidate()
             return true
         }
-        // Long-ish tap on the graph area toggles the live graph.
         if (event.y in dp(54).toFloat()..dp(154).toFloat() && event.x < width * .72f) {
             showGraph = !showGraph
             invalidate()
@@ -133,9 +131,14 @@ class RideInsightsOverlay(
         text(c, String.format(Locale.US, "LIVE SPEED  max %.1f", data.maxOrNull() ?: 0f), x + dp(12), y + dp(18), 8f, 0xFFDAE5F2.toInt(), Paint.Align.LEFT, true)
     }
 
+    @Suppress("DEPRECATION")
     private fun vibrate() {
         val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
-        if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(220L, VibrationEffect.DEFAULT_AMPLITUDE)) else @Suppress("DEPRECATION") v.vibrate(220L)
+        if (Build.VERSION.SDK_INT >= 26) {
+            v.vibrate(VibrationEffect.createOneShot(220L, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            v.vibrate(220L)
+        }
     }
 
     private fun text(c: Canvas, value: String, x: Float, y: Float, size: Float, color: Int, align: Paint.Align, bold: Boolean) {
