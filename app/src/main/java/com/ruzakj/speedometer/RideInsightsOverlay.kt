@@ -43,19 +43,15 @@ class RideInsightsOverlay(
 
     private val refresh = object : Runnable {
         override fun run() {
-            if (isInPip()) {
-                invalidate()
-            } else {
-                hideSystemBars()
-                invalidate()
-            }
+            hideSystemBarsIfNeeded()
+            invalidate()
             handler.postDelayed(this, 250L)
         }
     }
 
     init {
         setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-        post { hideSystemBars() }
+        post { hideSystemBarsIfNeeded() }
         handler.post(refresh)
     }
 
@@ -67,7 +63,7 @@ class RideInsightsOverlay(
     private fun activity(): Activity? = context as? Activity
     private fun isInPip(): Boolean = Build.VERSION.SDK_INT >= 24 && activity()?.isInPictureInPictureMode == true
 
-    private fun hideSystemBars() {
+    private fun hideSystemBarsIfNeeded() {
         val a = activity() ?: return
         if (isInPip()) return
         if (Build.VERSION.SDK_INT >= 30) {
@@ -91,14 +87,13 @@ class RideInsightsOverlay(
 
     fun smartMovingMs(): Long = movingMs
 
-    // Keep the controls in the empty lower area of the dashboard instead of covering the title/gauge.
     private fun chipRect(): RectF {
         val bottom = height.toFloat() - dp(62)
         return RectF(width - dp(112).toFloat(), bottom - dp(34).toFloat(), width - dp(12).toFloat(), bottom)
     }
 
     private fun isGraphTouch(e: MotionEvent): Boolean =
-        showGraph && e.x < width * .72f && e.y > height - dp(250)
+        e.x < width * .72f && e.y > height - dp(110)
 
     private fun isChipTouch(e: MotionEvent): Boolean = chipRect().contains(e.x, e.y)
 
@@ -115,7 +110,7 @@ class RideInsightsOverlay(
                 return true
             }
             if (isGraphTouch(event)) {
-                showGraph = false
+                showGraph = !showGraph
                 invalidate()
                 performClick()
                 return true
@@ -162,7 +157,7 @@ class RideInsightsOverlay(
         }
         lastOverspeed = over
 
-        // Compact telemetry strip at the very bottom. Nothing is drawn over the title, gauge or stat cards.
+        // Compact telemetry strip at the very bottom. Nothing covers the title, gauge or stat cards.
         val bottom = height.toFloat() - dp(62)
         val left = dp(12).toFloat()
         val chip = chipRect()
@@ -181,6 +176,7 @@ class RideInsightsOverlay(
         val speedAccText = if (sAcc.isFinite()) String.format(Locale.US, "±%.1f m/s", sAcc) else "speed ±—"
         text(c, "$gps  •  ±${if (acc < 900f) String.format(Locale.US, "%.0f", acc) else "—"} m  •  $speedAccText", left, bottom - dp(40), 8f, if (acc <= 10f) 0xFF56F0D0.toInt() else 0xFFFFB84D.toInt(), Paint.Align.LEFT, true)
         text(c, if (movingState) "MOVING" else "SMART STOP  •  ${formatMoving(movingMs)}", left, bottom - dp(24), 8f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
+        text(c, "tap left strip = speed graph", left, bottom - dp(8), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
 
         if (showGraph) drawGraph(c, dp(12).toFloat(), height - dp(245).toFloat(), width * .72f, dp(150).toFloat())
         if (over) text(c, String.format(Locale.US, "OVERSPEED  %.1f km/h", s), width / 2f, height - dp(110).toFloat(), 12f, 0xFFFF4966.toInt(), Paint.Align.CENTER, true)
