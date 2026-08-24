@@ -30,7 +30,7 @@ class HistoryActivity : Activity() {
         header.addView(TextView(this).apply {
             text = "RIDE HISTORY"
             textSize = 22f
-            setTextColor(text)
+            setTextColor(this@HistoryActivity.text)
             setTypeface(typeface, 1)
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
         header.addView(TextView(this).apply {
@@ -81,7 +81,7 @@ class HistoryActivity : Activity() {
         val summary = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(10))
-            background = rounded(0x141B2230)
+            background = rounded(0x141B2230.toInt())
         }
         summary.addView(TextView(this).apply {
             text = String.format(Locale.US, "%d RIDES   •   TOP %.1f km/h   •   LONGEST %.2f km", trips.size, topSpeed, longest)
@@ -101,13 +101,13 @@ class HistoryActivity : Activity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(16), dp(13), dp(16), dp(13))
-                background = rounded(if (index == 0) 0x2020E6FF else 0x181B2230)
+                background = rounded(if (index == 0) 0x2020E6FF.toInt() else 0x181B2230.toInt())
             }
             val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
             top.addView(TextView(this).apply {
                 text = "RIDE ${trips.size - index}"
                 textSize = 12f
-                setTextColor(if (index == 0) cyan else text)
+                setTextColor(if (index == 0) cyan else this@HistoryActivity.text)
                 setTypeface(typeface, 1)
             }, LinearLayout.LayoutParams(0, dp(30), 1f))
             top.addView(TextView(this).apply {
@@ -119,7 +119,7 @@ class HistoryActivity : Activity() {
             card.addView(TextView(this).apply {
                 text = String.format(Locale.US, "%.2f km    •    MAX %.1f km/h    •    AVG %.1f km/h\nMOVING %s", trip.distanceKm, trip.maxKmh, trip.avgKmh, HistoryStore.duration(trip.movingMs))
                 textSize = 12f
-                setTextColor(text)
+                setTextColor(this@HistoryActivity.text)
                 setPadding(0, dp(4), 0, 0)
             })
             root.addView(card, LinearLayout.LayoutParams(-1, dp(88)).apply { setMargins(0, 0, 0, dp(10)) })
@@ -129,7 +129,7 @@ class HistoryActivity : Activity() {
     private fun rounded(color: Int) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = dp(18).toFloat()
-        setStroke(dp(1), 0x443B4A65)
+        setStroke(dp(1), 0x443B4A65.toInt())
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
