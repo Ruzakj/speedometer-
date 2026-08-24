@@ -43,6 +43,8 @@ class RideInsightsOverlay(
     init { setLayerType(View.LAYER_TYPE_SOFTWARE, null); handler.post(refresh) }
     override fun onDetachedFromWindow() { handler.removeCallbacksAndMessages(null); super.onDetachedFromWindow() }
 
+    fun smartMovingMs(): Long = movingMs
+
     private fun isGraphTouch(e: MotionEvent) = e.y in dp(54).toFloat()..dp(154).toFloat() && e.x < width * .72f
     private fun isChipTouch(e: MotionEvent) = RectF(width - dp(112), dp(8), width - dp(12), dp(48)).contains(e.x, e.y)
 
