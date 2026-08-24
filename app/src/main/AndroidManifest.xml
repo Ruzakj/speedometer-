@@ -3,16 +3,13 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <application
+        android:name=".SpeedometerApp"
         android:allowBackup="true"
         android:label="Speedometer"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
-        <activity
-            android:name=".MainActivityV2"
-            android:resizeableActivity="true"
-            android:exported="true"
-            android:supportsPictureInPicture="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation">
+        <activity android:name=".HistoryActivity" android:exported="false" android:screenOrientation="portrait" />
+        <activity android:name=".MainActivityV2" android:resizeableActivity="true" android:exported="true" android:supportsPictureInPicture="true" android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
