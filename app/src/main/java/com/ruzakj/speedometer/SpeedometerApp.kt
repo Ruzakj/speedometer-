@@ -49,7 +49,7 @@ class SpeedometerApp : Application() {
     private fun installInsights(activity: MainActivityV2) {
         val decor = activity.window.decorView as? FrameLayout ?: return
         if (decor.findViewWithTag<View>("ride_insights_overlay") != null) return
-        insights = RideInsightsOverlay(
+        val overlay = RideInsightsOverlay(
             activity,
             { readFloat(activity, "speedKmh") },
             { readFloat(activity, "accuracyM", 999f) },
@@ -57,7 +57,8 @@ class SpeedometerApp : Application() {
             { activity.getSharedPreferences("ride_settings", MODE_PRIVATE).getFloat("overspeed_limit", 80f) },
             { value -> activity.getSharedPreferences("ride_settings", MODE_PRIVATE).edit().putFloat("overspeed_limit", value.coerceIn(30f, 110f)).apply() }
         ).apply { tag = "ride_insights_overlay" }
-        decor.addView(insights, FrameLayout.LayoutParams(-1, -1))
+        insights = overlay
+        decor.addView(overlay, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun installHistoryButton(activity: Activity) {
