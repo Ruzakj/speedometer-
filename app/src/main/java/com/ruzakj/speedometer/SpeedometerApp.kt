@@ -2,6 +2,8 @@ package com.ruzakj.speedometer
 
 import android.app.Activity
 import android.app.Application
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,7 +22,11 @@ class SpeedometerApp : Application() {
             val activity = currentMain
             if (activity != null) {
                 val tracking = readBoolean(activity, "tracking")
-                if (wasTracking && !tracking) saveSnapshot(activity)
+                if (!wasTracking && tracking) startRecorder()
+                if (wasTracking && !tracking) {
+                    saveSnapshot(activity)
+                    stopRecorder()
+                }
                 wasTracking = tracking
             }
             handler.postDelayed(this, 500L)
@@ -44,6 +50,15 @@ class SpeedometerApp : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
         })
         handler.post(sessionMonitor)
+    }
+
+    private fun startRecorder() {
+        val intent = Intent(this, RideRecorderService::class.java).setAction(RideRecorderService.ACTION_START)
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun stopRecorder() {
+        startService(Intent(this, RideRecorderService::class.java).setAction(RideRecorderService.ACTION_STOP))
     }
 
     private fun installInsights(activity: MainActivityV2) {
@@ -71,7 +86,7 @@ class SpeedometerApp : Application() {
             setBackgroundColor(0x221B2230)
             setPadding(dp(activity, 10), 0, dp(activity, 10), 0)
             elevation = dp(activity, 4).toFloat()
-            setOnClickListener { activity.startActivity(android.content.Intent(activity, HistoryActivity::class.java)) }
+            setOnClickListener { activity.startActivity(Intent(activity, HistoryActivity::class.java)) }
         }
         decor.addView(button, FrameLayout.LayoutParams(dp(activity, 78), dp(activity, 34), Gravity.TOP or Gravity.END).apply { topMargin = dp(activity, 54); rightMargin = dp(activity, 10) })
     }
