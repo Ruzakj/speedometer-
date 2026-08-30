@@ -28,6 +28,7 @@ class RideInsightsOverlay(
     private val path = Path()
     private val handler = Handler(Looper.getMainLooper())
     private val history = ArrayDeque<Float>()
+    private val live = context.getSharedPreferences("ride_live", Context.MODE_PRIVATE)
     private var showGraph = false
     private var movingState = false
     private var stoppedSince = 0L
@@ -68,29 +69,23 @@ class RideInsightsOverlay(
         } else {
             @Suppress("DEPRECATION")
             a.window.decorView.systemUiVisibility =
-                View.SYSTEM_UI_FLAG_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         }
         a.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     fun smartMovingMs(): Long = movingMs
 
-    private fun isGraphTouch(e: MotionEvent): Boolean =
-        e.x < width * .78f && e.y > height - dp(110)
+    private fun isGraphTouch(e: MotionEvent): Boolean = e.x < width * .78f && e.y > height - dp(130)
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (isInPip()) return false
         if (event.action == MotionEvent.ACTION_DOWN) return isGraphTouch(event)
         if (event.action == MotionEvent.ACTION_UP && isGraphTouch(event)) {
             showGraph = !showGraph
-            invalidate()
-            performClick()
-            return true
+            invalidate(); performClick(); return true
         }
         return false
     }
@@ -99,15 +94,11 @@ class RideInsightsOverlay(
         if (lastSampleAt != 0L) {
             val dt = now - lastSampleAt
             if (dt in 1..2_000) {
-                if (s >= 2f) {
-                    movingState = true
-                    stoppedSince = 0L
-                } else if (movingState && s <= 1f) {
+                if (s >= 2f) { movingState = true; stoppedSince = 0L }
+                else if (movingState && s <= 1f) {
                     if (stoppedSince == 0L) stoppedSince = now
                     if (now - stoppedSince >= 4_000L) movingState = false
-                } else if (s > 1f) {
-                    stoppedSince = 0L
-                }
+                } else if (s > 1f) stoppedSince = 0L
                 if (movingState) movingMs += dt
             }
         }
@@ -119,12 +110,17 @@ class RideInsightsOverlay(
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         if (isInPip()) return
-
         val now = System.currentTimeMillis()
-        val s = speed().coerceIn(0f, 110f)
+        val s = speed().coerceIn(0f, 220f)
         sample(now, s)
         val acc = accuracy()
         val sAcc = speedAccuracy()
+        val lean = live.getFloat("lean", 0f)
+        val g = live.getFloat("g_force", 0f)
+        val altitude = live.getFloat("altitude", 0f)
+        val gradient = live.getFloat("gradient", 0f)
+        val t60 = live.getFloat("zero60", 0f)
+        val t100 = live.getFloat("zero100", 0f)
 
         val bottom = height.toFloat() - dp(62)
         val left = dp(12).toFloat()
@@ -136,21 +132,21 @@ class RideInsightsOverlay(
             else -> "GPS SEARCHING"
         }
         val speedAccText = if (sAcc.isFinite()) String.format(Locale.US, "±%.1f m/s", sAcc) else "speed ±—"
-        text(c, "$gps  •  ±${if (acc < 900f) String.format(Locale.US, "%.0f", acc) else "—"} m  •  $speedAccText", left, bottom - dp(40), 8f, if (acc <= 10f) 0xFF56F0D0.toInt() else 0xFFFFB84D.toInt(), Paint.Align.LEFT, true)
-        text(c, if (movingState) "MOVING" else "SMART STOP  •  ${formatMoving(movingMs)}", left, bottom - dp(24), 8f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
-        text(c, "tap strip = speed graph", left, bottom - dp(8), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
+        text(c, "$gps  •  ±${if (acc < 900f) String.format(Locale.US, "%.0f", acc) else "—"} m  •  $speedAccText", left, bottom - dp(58), 8f, if (acc <= 10f) 0xFF56F0D0.toInt() else 0xFFFFB84D.toInt(), Paint.Align.LEFT, true)
+        text(c, String.format(Locale.US, "LEAN %+05.1f°  •  G %.2f  •  ALT %.0f m  •  GRADE %+.1f%%", lean, g, altitude, gradient), left, bottom - dp(42), 8f, 0xFFB9C6D8.toInt(), Paint.Align.LEFT, true)
+        val accel = "0–60 ${if (t60 > 0f) String.format(Locale.US, "%.2fs", t60) else "—"}  •  0–100 ${if (t100 > 0f) String.format(Locale.US, "%.2fs", t100) else "—"}"
+        text(c, accel, left, bottom - dp(26), 8f, 0xFFFFB24A.toInt(), Paint.Align.LEFT, true)
+        text(c, (if (movingState) "MOVING" else "SMART STOP") + "  •  " + formatMoving(movingMs) + "  •  tap strip = graph", left, bottom - dp(10), 7f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, false)
 
-        if (showGraph) drawGraph(c, dp(12).toFloat(), height - dp(245).toFloat(), width * .78f, dp(150).toFloat())
+        if (showGraph) drawGraph(c, dp(12).toFloat(), height - dp(265).toFloat(), width * .78f, dp(150).toFloat())
     }
 
     private fun drawGraph(c: Canvas, x: Float, y: Float, w: Float, h: Float) {
-        paint.style = Paint.Style.FILL
-        paint.color = 0xEE141A24.toInt()
+        paint.style = Paint.Style.FILL; paint.color = 0xEE141A24.toInt()
         c.drawRoundRect(RectF(x, y, x + w, y + h), dp(14).toFloat(), dp(14).toFloat(), paint)
         val data = history.toList()
         if (data.size < 2) {
-            text(c, "SPEED GRAPH  •  collecting…", x + dp(12), y + dp(22), 9f, 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
-            return
+            text(c, "SPEED GRAPH  •  collecting…", x + dp(12), y + dp(22), 9f, 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true); return
         }
         val maxV = max(20f, data.maxOrNull() ?: 20f)
         path.reset()
@@ -159,32 +155,18 @@ class RideInsightsOverlay(
             val py = y + h - dp(10) - (h - dp(24)) * (v / maxV).coerceIn(0f, 1f)
             if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
         }
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = dp(2).toFloat()
-        paint.color = 0xFF31D8FF.toInt()
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(2).toFloat(); paint.color = 0xFF31D8FF.toInt()
         c.drawPath(path, paint)
         text(c, String.format(Locale.US, "LIVE SPEED  max %.1f", data.maxOrNull() ?: 0f), x + dp(12), y + dp(18), 8f, 0xFFDAE5F2.toInt(), Paint.Align.LEFT, true)
     }
 
-    private fun formatMoving(ms: Long): String {
-        val s = ms / 1000L
-        return String.format(Locale.US, "%02d:%02d", s / 60, s % 60)
-    }
-
-    override fun performClick(): Boolean {
-        super.performClick()
-        return true
-    }
-
+    private fun formatMoving(ms: Long): String { val s = ms / 1000L; return String.format(Locale.US, "%02d:%02d", s / 60, s % 60) }
+    override fun performClick(): Boolean { super.performClick(); return true }
     private fun text(c: Canvas, value: String, x: Float, y: Float, size: Float, color: Int, align: Paint.Align, bold: Boolean) {
-        paint.style = Paint.Style.FILL
-        paint.color = color
-        paint.textSize = dp(size).toFloat()
-        paint.textAlign = align
+        paint.style = Paint.Style.FILL; paint.color = color; paint.textSize = dp(size).toFloat(); paint.textAlign = align
         paint.typeface = if (bold) android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD) else android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
         c.drawText(value, x, y, paint)
     }
-
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun dp(v: Float) = v * resources.displayMetrics.density
 }
