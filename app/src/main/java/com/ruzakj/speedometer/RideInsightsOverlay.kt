@@ -9,8 +9,6 @@ import android.graphics.RectF
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.VibrationEffect
-import android.os.Vibrator
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
@@ -24,17 +22,12 @@ class RideInsightsOverlay(
     context: Context,
     private val speed: () -> Float,
     private val accuracy: () -> Float,
-    private val speedAccuracy: () -> Float,
-    private val limit: () -> Float,
-    private val setLimit: (Float) -> Unit
+    private val speedAccuracy: () -> Float
 ) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
     private val handler = Handler(Looper.getMainLooper())
     private val history = ArrayDeque<Float>()
-    private val limits = floatArrayOf(50f, 60f, 70f, 80f, 90f, 100f, 110f)
-    private var lastOverspeed = false
-    private var flashUntil = 0L
     private var showGraph = false
     private var movingState = false
     private var stoppedSince = 0L
@@ -87,34 +80,17 @@ class RideInsightsOverlay(
 
     fun smartMovingMs(): Long = movingMs
 
-    private fun chipRect(): RectF {
-        val bottom = height.toFloat() - dp(62)
-        return RectF(width - dp(112).toFloat(), bottom - dp(34).toFloat(), width - dp(12).toFloat(), bottom)
-    }
-
     private fun isGraphTouch(e: MotionEvent): Boolean =
-        e.x < width * .72f && e.y > height - dp(110)
-
-    private fun isChipTouch(e: MotionEvent): Boolean = chipRect().contains(e.x, e.y)
+        e.x < width * .78f && e.y > height - dp(110)
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (isInPip()) return false
-        if (event.action == MotionEvent.ACTION_DOWN) return isChipTouch(event) || isGraphTouch(event)
-        if (event.action == MotionEvent.ACTION_UP) {
-            if (isChipTouch(event)) {
-                val current = limit()
-                val next = limits.firstOrNull { it > current + .1f } ?: limits.first()
-                setLimit(next)
-                invalidate()
-                performClick()
-                return true
-            }
-            if (isGraphTouch(event)) {
-                showGraph = !showGraph
-                invalidate()
-                performClick()
-                return true
-            }
+        if (event.action == MotionEvent.ACTION_DOWN) return isGraphTouch(event)
+        if (event.action == MotionEvent.ACTION_UP && isGraphTouch(event)) {
+            showGraph = !showGraph
+            invalidate()
+            performClick()
+            return true
         }
         return false
     }
@@ -147,25 +123,11 @@ class RideInsightsOverlay(
         val now = System.currentTimeMillis()
         val s = speed().coerceIn(0f, 110f)
         sample(now, s)
-        val lim = limit().coerceIn(30f, 110f)
         val acc = accuracy()
         val sAcc = speedAccuracy()
-        val over = s >= lim && s >= 3f
-        if (over && !lastOverspeed) {
-            flashUntil = now + 1800L
-            vibrate()
-        }
-        lastOverspeed = over
 
-        // Compact telemetry strip at the very bottom. Nothing covers the title, gauge or stat cards.
         val bottom = height.toFloat() - dp(62)
         val left = dp(12).toFloat()
-        val chip = chipRect()
-        paint.style = Paint.Style.FILL
-        paint.color = if (over || now < flashUntil) 0xD9FF355E.toInt() else 0xC91A202B.toInt()
-        c.drawRoundRect(chip, dp(18).toFloat(), dp(18).toFloat(), paint)
-        text(c, String.format(Locale.US, "LIMIT %.0f", lim), chip.centerX(), chip.centerY() + dp(4), 10f, 0xFFF7F9FC.toInt(), Paint.Align.CENTER, true)
-
         val gps = when {
             acc <= 5f -> "GPS EXCELLENT"
             acc <= 10f -> "GPS GOOD"
@@ -176,10 +138,9 @@ class RideInsightsOverlay(
         val speedAccText = if (sAcc.isFinite()) String.format(Locale.US, "±%.1f m/s", sAcc) else "speed ±—"
         text(c, "$gps  •  ±${if (acc < 900f) String.format(Locale.US, "%.0f", acc) else "—"} m  •  $speedAccText", left, bottom - dp(40), 8f, if (acc <= 10f) 0xFF56F0D0.toInt() else 0xFFFFB84D.toInt(), Paint.Align.LEFT, true)
         text(c, if (movingState) "MOVING" else "SMART STOP  •  ${formatMoving(movingMs)}", left, bottom - dp(24), 8f, if (movingState) 0xFF56F0D0.toInt() else 0xFF9AA5B5.toInt(), Paint.Align.LEFT, true)
-        text(c, "tap left strip = speed graph", left, bottom - dp(8), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
+        text(c, "tap strip = speed graph", left, bottom - dp(8), 7f, 0xFF657186.toInt(), Paint.Align.LEFT, false)
 
-        if (showGraph) drawGraph(c, dp(12).toFloat(), height - dp(245).toFloat(), width * .72f, dp(150).toFloat())
-        if (over) text(c, String.format(Locale.US, "OVERSPEED  %.1f km/h", s), width / 2f, height - dp(110).toFloat(), 12f, 0xFFFF4966.toInt(), Paint.Align.CENTER, true)
+        if (showGraph) drawGraph(c, dp(12).toFloat(), height - dp(245).toFloat(), width * .78f, dp(150).toFloat())
     }
 
     private fun drawGraph(c: Canvas, x: Float, y: Float, w: Float, h: Float) {
@@ -208,12 +169,6 @@ class RideInsightsOverlay(
     private fun formatMoving(ms: Long): String {
         val s = ms / 1000L
         return String.format(Locale.US, "%02d:%02d", s / 60, s % 60)
-    }
-
-    @Suppress("DEPRECATION")
-    private fun vibrate() {
-        val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
-        if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(220L, VibrationEffect.DEFAULT_AMPLITUDE)) else v.vibrate(220L)
     }
 
     override fun performClick(): Boolean {
