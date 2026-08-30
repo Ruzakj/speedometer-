@@ -1,5 +1,6 @@
 package com.ruzakj.speedometer
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -16,11 +17,9 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.asin
 import kotlin.math.max
 
 class RideRecorderService : Service(), LocationListener, SensorEventListener {
@@ -212,10 +211,11 @@ class RideRecorderService : Service(), LocationListener, SensorEventListener {
         }
     }
 
-    private fun notification(text: String): android.app.Notification {
+    private fun notification(text: String): Notification {
         val open = Intent(this, MainActivityV2::class.java)
         val pi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
+        return builder
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentTitle("Speedometer • Background Tracking")
             .setContentText(text)
