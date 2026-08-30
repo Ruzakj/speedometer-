@@ -53,9 +53,7 @@ class SpeedometerApp : Application() {
             activity,
             { readFloat(activity, "speedKmh") },
             { readFloat(activity, "accuracyM", 999f) },
-            { readFloat(activity, "speedAccuracyMps", Float.MAX_VALUE) },
-            { activity.getSharedPreferences("ride_settings", MODE_PRIVATE).getFloat("overspeed_limit", 80f) },
-            { value -> activity.getSharedPreferences("ride_settings", MODE_PRIVATE).edit().putFloat("overspeed_limit", value.coerceIn(30f, 110f)).apply() }
+            { readFloat(activity, "speedAccuracyMps", Float.MAX_VALUE) }
         ).apply { tag = "ride_insights_overlay" }
         insights = overlay
         decor.addView(overlay, FrameLayout.LayoutParams(-1, -1))
