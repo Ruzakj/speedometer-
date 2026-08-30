@@ -42,7 +42,7 @@ class MainActivityV2 : Activity(), LocationListener {
     private val handler = Handler(Looper.getMainLooper())
     private var tracking=false
     private var speedKmh=0f; private var maxKmh=0f; private var distanceM=0f; private var movingMs=0L
-    private var averageSum=0.0; private var averageSamples=0; private var accuracyM=999f; private var speedAccuracyMps=Float.MAX_VALUE; private var smartMoving=false; private var stoppedSinceNs=0L; private var overspeedLimitKmh=80f; private val speedHistory=ArrayDeque<Float>()
+    private var averageSum=0.0; private var averageSamples=0; private var accuracyM=999f; private var speedAccuracyMps=Float.MAX_VALUE; private var smartMoving=false; private var stoppedSinceNs=0L; private val speedHistory=ArrayDeque<Float>()
     private var introAnimating=false; private var introSpeed=0f; private var introAnimator:ValueAnimator?=null
     private var burnShiftX=0f; private var burnShiftY=0f; private var burnIndex=0
     private val burnInShift=object:Runnable{override fun run(){if(!isFinishing&&!isInPictureInPictureMode){val d=dfForBurnIn();val pattern=arrayOf(floatArrayOf(1f,0f),floatArrayOf(0f,1f),floatArrayOf(-1f,0f),floatArrayOf(0f,-1f),floatArrayOf(1f,1f),floatArrayOf(-1f,1f),floatArrayOf(-1f,-1f),floatArrayOf(1f,-1f));val p=pattern[burnIndex%pattern.size];burnShiftX=p[0]*d;burnShiftY=p[1]*d;burnIndex++;dash.invalidate()};handler.postDelayed(this,75000L)}}
@@ -51,8 +51,7 @@ class MainActivityV2 : Activity(), LocationListener {
     override fun onCreate(state:Bundle?){super.onCreate(state);window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);window.statusBarColor=BG;window.navigationBarColor=BG
         if(Build.VERSION.SDK_INT>=29){window.isStatusBarContrastEnforced=false;window.isNavigationBarContrastEnforced=false}
         locationManager=getSystemService(Context.LOCATION_SERVICE) as LocationManager;dash=Dashboard(this)
-        overspeedLimitKmh=getSharedPreferences("ride_settings",Context.MODE_PRIVATE).getFloat("overspeed_limit",80f).coerceIn(30f,110f)
-        val insights=RideInsightsOverlay(this,{speedKmh},{accuracyM},{speedAccuracyMps},{overspeedLimitKmh},{setOverspeedLimit(it)})
+        val insights=RideInsightsOverlay(this,{speedKmh},{accuracyM},{speedAccuracyMps})
         val root=android.widget.FrameLayout(this);root.addView(dash,android.widget.FrameLayout.LayoutParams(-1,-1));root.addView(insights,android.widget.FrameLayout.LayoutParams(-1,-1))
         dash.setOnApplyWindowInsetsListener{view,insets->if(Build.VERSION.SDK_INT>=30){val b=insets.getInsets(WindowInsets.Type.systemBars());view.setPadding(dp(16),b.top+dp(6),dp(16),b.bottom+dp(8))}else view.setPadding(dp(16),dp(24),dp(16),dp(16));insets}
         setContentView(root);handler.post(refresh);handler.postDelayed(burnInShift,75000L);playStartupSweep()
@@ -92,13 +91,12 @@ class MainActivityV2 : Activity(), LocationListener {
         if(smartMoving&&fix.quality>.35f){averageSamples++;averageSum+=speedKmh.toDouble()}
         speedHistory.addLast(speedKmh);while(speedHistory.size>120)speedHistory.removeFirst()
         maxKmh=max(maxKmh,speedKmh).coerceAtMost(MAX_SPEED)
-        if(speedKmh>=overspeedLimitKmh&&speedKmh>=3f)dash.message=String.format(Locale.US,"OVERSPEED  •  %.1f / %.0f km/h",speedKmh,overspeedLimitKmh) else dash.message="GPS ACTIVE  •  PRECISION"
+        dash.message="GPS ACTIVE  •  PRECISION"
         dash.invalidate()
     }
     private fun gpsLabel()=when{accuracyM<=5f&&(!speedAccuracyMps.isFinite()||speedAccuracyMps<=.6f)->"EXCELLENT";accuracyM<=10f&&(!speedAccuracyMps.isFinite()||speedAccuracyMps<=1.2f)->"GOOD";accuracyM<=20f->"FAIR";accuracyM<900f->"WEAK";else->"SEARCHING"}
     private fun averageKmh()=if(averageSamples==0)0f else(averageSum/averageSamples).toFloat().coerceAtMost(MAX_SPEED)
     private fun movingTime():String{val s=movingMs/1000L;return if(s>=3600)String.format(Locale.US,"%02d:%02d:%02d",s/3600,(s%3600)/60,s%60)else String.format(Locale.US,"%02d:%02d",s/60,s%60)}
-    private fun setOverspeedLimit(value:Float){overspeedLimitKmh=value.coerceIn(30f,110f);getSharedPreferences("ride_settings",Context.MODE_PRIVATE).edit().putFloat("overspeed_limit",overspeedLimitKmh).apply();dash.invalidate()}
     private fun enterPip(){if(Build.VERSION.SDK_INT<26||isInPictureInPictureMode)return;val landscape=resources.configuration.orientation==Configuration.ORIENTATION_LANDSCAPE;val ratio=if(landscape)Rational(16,9)else Rational(9,16);val p=PictureInPictureParams.Builder().setAspectRatio(ratio).apply{if(Build.VERSION.SDK_INT>=31)setSeamlessResizeEnabled(true)}.build();try{enterPictureInPictureMode(p)}catch(_:IllegalStateException){dash.message="PIP UNAVAILABLE";dash.invalidate()}}
     override fun onPictureInPictureModeChanged(v:Boolean){super.onPictureInPictureModeChanged(v);dash.setPipMode(v);dash.invalidate()}
     override fun onRequestPermissionsResult(c:Int,p:Array<out String>,r:IntArray){super.onRequestPermissionsResult(c,p,r);if(c==REQUEST_LOCATION&&r.isNotEmpty()&&r[0]==PackageManager.PERMISSION_GRANTED)startTracking()else if(c==REQUEST_LOCATION){dash.message="PRECISE GPS PERMISSION REQUIRED";dash.invalidate()}}
