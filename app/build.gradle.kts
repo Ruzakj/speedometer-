@@ -59,7 +59,7 @@ val applyDashboardBackground by tasks.registering {
                 """
         private fun drawBackground(c:Canvas){
             c.drawColor(BG)
-            val bmp=customBackgroundBitmap ?: backgroundBitmap ?: return
+            val bmp=customBackgroundBitmap ?: return
             val bw=bmp.width.toFloat(); val bh=bmp.height.toFloat(); val vw=width.toFloat(); val vh=height.toFloat()
             if(bw<=0f || bh<=0f || vw<=0f || vh<=0f) return
             val scale=max(vw/bw, vh/bh)
